@@ -23,6 +23,55 @@ from . import config
 from .tools import TOOLS_SCHEMA, TOOL_FUNCTIONS, WORKSPACE, list_files, set_confirm_handler
 from .voice import StreamSpeaker, warmup, speak
 
+# ---------------------------------------------------------------------------
+# Tampilan terminal — gaya CLI minimalis & profesional
+# ---------------------------------------------------------------------------
+_DIM, _BOLD, _CYAN, _GREEN, _RED, _RESET = (
+    "\033[2m", "\033[1m", "\033[36m", "\033[32m", "\033[31m", "\033[0m",
+)
+
+
+def _pendekkan(teks: str, maks: int) -> str:
+    """Pangkas teks panjang dari depan, sisakan ekornya (mis. path)."""
+    return teks if len(teks) <= maks else "…" + teks[-(maks - 1):]
+
+
+def _kotak(rows, lebar: int = 56) -> None:
+    """Cetak kotak rapi. Tiap row = (teks_polos_untuk_ukur, teks_berwarna)."""
+    print(f"{_CYAN}╭{'─' * lebar}╮{_RESET}")
+    for polos, warna in rows:
+        pad = " " * max(lebar - 2 - len(polos), 0)
+        print(f"{_CYAN}│{_RESET} {warna}{pad} {_CYAN}│{_RESET}")
+    print(f"{_CYAN}╰{'─' * lebar}╯{_RESET}")
+
+
+def _info(label: str, nilai: str) -> tuple[str, str]:
+    """Baris info berlabel untuk banner (label redup, nilai normal)."""
+    polos = f"{label:<8}{nilai}"
+    warna = f"{_DIM}{label:<8}{_RESET}{nilai}"
+    return polos, warna
+
+
+def _banner(handsfree: bool, lebar: int = 56) -> None:
+    """Banner pembuka ber-box dengan info model, folder, dan mode."""
+    ws = _pendekkan(str(WORKSPACE), lebar - 2 - 8)
+    rows = [
+        ("Voca  voice coding assistant",
+         f"{_BOLD}Voca{_RESET}{_DIM}  voice coding assistant{_RESET}"),
+        ("", ""),
+        _info("model", config.QWEN_MODEL),
+        _info("folder", ws),
+        _info("mode", "hands-free (suara)" if handsfree else "teks"),
+    ]
+    print()
+    _kotak(rows, lebar)
+
+
+def _hint(teks: str) -> None:
+    """Baris petunjuk redup di bawah banner."""
+    print(f"{_DIM}{teks}{_RESET}\n")
+
+
 SYSTEM_PROMPT = """Kamu adalah Voca, asisten coding berbasis suara.
 
 Gaya bicara:
@@ -160,7 +209,7 @@ def hubungkan_tool(client, messages):
                 args = json.loads(tc["args"]) if tc["args"] else {}
             except json.JSONDecodeError:
                 args = {}
-            print(f"\n   {tc['name']}({_ringkas_args(args)})")
+            print(f"\n{_DIM}  › {tc['name']}({_ringkas_args(args)}){_RESET}")
 
             if fungsi is None:
                 hasil = f"Tool tidak dikenal: {tc['name']}"
@@ -178,7 +227,7 @@ def hubungkan_tool(client, messages):
         # Lanjutkan loop: model lihat hasil tool lalu lanjut bekerja.
 
     # Batas iterasi tercapai tanpa selesai -> stop biar tak muter & boros token.
-    print(f"\n   Batas {config.MAX_TOOL_ITERS} langkah tercapai, berhenti dulu.")
+    print(f"\n{_DIM}  batas {config.MAX_TOOL_ITERS} langkah tercapai, berhenti dulu.{_RESET}")
     pesan_stop = ("Ini butuh banyak langkah, aku berhenti dulu biar nggak muter. "
                   "Kasih tahu mau lanjut ke bagian mana.")
     messages.append({"role": "assistant", "content": pesan_stop})
@@ -207,10 +256,10 @@ def _voice_confirm(prompt: str) -> bool:
     """Konfirmasi via suara: AI bertanya, user menjawab 'ya'/'tidak'."""
     from .listen import listen_auto
 
-    print(f"\n{prompt}")
+    print(f"\n{_CYAN}?{_RESET} {prompt}")
     speak(prompt + " Jawab ya atau tidak.")
     jawab = listen_auto().lower()
-    print(f"(suara) Jawaban: {jawab!r}")
+    print(f"{_DIM}(suara) jawaban:{_RESET} {jawab!r}")
     setuju = bool(set(re.findall(r"\w+", jawab)) & _KATA_YA)
     speak("Oke, saya lanjutkan." if setuju else "Baik, saya batalkan.")
     return setuju
@@ -221,17 +270,14 @@ def _voice_confirm(prompt: str) -> bool:
 # ---------------------------------------------------------------------------
 def run_text_mode(client, messages):
     """Mode teks: ketik perintah, atau 'v' + ENTER untuk bicara sekali."""
-    print("=" * 60)
-    print(f"\033[1mVoca\033[0m — model: {config.QWEN_MODEL}")
-    print(f"Folder kerja: {WORKSPACE}")
-    print("Ketik perintah, atau 'v' + ENTER untuk bicara. 'keluar' untuk berhenti.")
-    print("=" * 60)
+    _banner(handsfree=False)
+    _hint("ketik perintah  ·  'v' + Enter untuk bicara  ·  'keluar' untuk berhenti")
 
     while True:
         try:
-            perintah = input("\nKamu (ketik / 'v'=bicara): ").strip()
+            perintah = input(f"{_GREEN}❯{_RESET} ").strip()
         except (EOFError, KeyboardInterrupt):
-            print("\nSampai jumpa!")
+            print(f"\n{_DIM}Sampai jumpa.{_RESET}")
             break
 
         if perintah.lower() in ("v", "suara", "voice"):
@@ -239,21 +285,21 @@ def run_text_mode(client, messages):
                 from .listen import listen
                 perintah = listen()
             except Exception as e:
-                print(f"   [input suara gagal: {e}]")
+                print(f"{_DIM}  input suara gagal: {e}{_RESET}")
                 continue
-            print(f"(suara) Kamu: {perintah}")
+            print(f"{_DIM}(suara){_RESET} {perintah}")
 
         if not perintah:
             continue
         if perintah.lower() in ("keluar", "exit", "quit"):
-            print("Sampai jumpa!")
+            print(f"{_DIM}Sampai jumpa.{_RESET}")
             break
 
         messages.append({"role": "user", "content": perintah})
         try:
             hubungkan_tool(client, messages)
         except Exception as e:
-            print(f"\n\033[31mError:\033[0m {e}")
+            print(f"\n{_RED}Error:{_RESET} {e}")
 
 
 def run_handsfree_mode(client, messages):
@@ -262,41 +308,39 @@ def run_handsfree_mode(client, messages):
 
     set_confirm_handler(_voice_confirm)  # konfirmasi aksi lewat suara
 
-    print("=" * 60)
-    print(f"\033[1mVoca — HANDS-FREE\033[0m — model: {config.QWEN_MODEL}")
-    print(f"Folder kerja: {WORKSPACE}")
-    print("Bicara langsung. Ucapkan 'berhenti' untuk keluar. (Ctrl+C juga bisa)")
-    print("=" * 60)
+    _banner(handsfree=True)
+    _hint("bicara langsung  ·  ucapkan 'berhenti' untuk keluar  ·  Ctrl+C juga bisa")
     speak("Halo, saya siap membantu. Silakan bicara.")
 
     while True:
-        print("\nMendengarkan... (bicara, berhenti otomatis saat kamu diam)")
+        print(f"\n{_DIM}mendengarkan…  (diam sejenak untuk berhenti){_RESET}")
         try:
             perintah = listen_auto()
         except KeyboardInterrupt:
             speak("Sampai jumpa!")
-            print("\nSampai jumpa!")
+            print(f"\n{_DIM}Sampai jumpa.{_RESET}")
             break
 
         if not perintah:
             continue  # tidak terdengar suara -> dengar lagi
-        print(f"(suara) Kamu: {perintah}")
+        print(f"{_DIM}(suara){_RESET} {perintah}")
 
         if _minta_keluar(perintah):
             speak("Baik, sampai jumpa!")
-            print("Sampai jumpa!")
+            print(f"{_DIM}Sampai jumpa.{_RESET}")
             break
 
         messages.append({"role": "user", "content": perintah})
         try:
             hubungkan_tool(client, messages)
         except Exception as e:
-            print(f"\n\033[31mError:\033[0m {e}")
+            print(f"\n{_RED}Error:{_RESET} {e}")
 
 
 def main():
     if not config.QWEN_API_KEY:
-        print("Error: DASHSCOPE_API_KEY belum diset. Salin .env.example ke .env dan isi key-mu.")
+        print(f"{_RED}Error:{_RESET} DASHSCOPE_API_KEY belum diset. "
+              f"Salin .env.example ke .env, lalu isi key-mu.")
         sys.exit(1)
 
     client = OpenAI(api_key=config.QWEN_API_KEY, base_url=config.QWEN_BASE_URL)

@@ -17,8 +17,8 @@ from pathlib import Path
 from . import config
 
 # Kode warna ANSI untuk tampilan diff di terminal.
-_HIJAU, _MERAH, _CYAN, _TEBAL, _RESET = (
-    "\033[32m", "\033[31m", "\033[36m", "\033[1m", "\033[0m",
+_HIJAU, _MERAH, _CYAN, _DIM, _TEBAL, _RESET = (
+    "\033[32m", "\033[31m", "\033[36m", "\033[2m", "\033[1m", "\033[0m",
 )
 
 # Folder berat/tak relevan yang dilewati saat menyusuri (list & search).
@@ -60,7 +60,7 @@ def _resolve_safe(path: str) -> Path:
 
 def _keyboard_confirm(prompt: str) -> bool:
     """Konfirmasi default: ketik y/n di keyboard."""
-    jawab = input(f"\n{prompt} [y/N]: ").strip().lower()
+    jawab = input(f"\n{_CYAN}?{_RESET} {prompt} {_DIM}[y/N]{_RESET} ").strip().lower()
     return jawab in ("y", "yes", "ya")
 
 
