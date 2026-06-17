@@ -13,7 +13,9 @@ dan ffplay (ffmpeg) untuk fallback gTTS. Pitch-shift pakai ffmpeg rubberband.
 
 import queue
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 
@@ -41,32 +43,93 @@ def _get_voice():
     return _voice
 
 
-def _open_player(sr: int):
-    """Buka pipeline pemutar audio mentah (PCM 16-bit mono @ sr).
+def _pitch_aktif() -> bool:
+    """Pitch-shift dipakai hanya kalau diminta DAN ffmpeg tersedia."""
+    return abs(config.VOICE_PITCH - 1.0) >= 0.01 and shutil.which("ffmpeg") is not None
 
-    Tanpa pitch-shift: tulis langsung ke aplay (paling ringan).
-    Dengan pitch-shift: PCM -> ffmpeg(rubberband) -> aplay.
 
-    Return (file_tujuan_tulis, daftar_proses_untuk_ditunggu).
+def _ffmpeg_pitch_cmd(sr: int):
+    """Perintah ffmpeg rubberband: geser nada, jaga timbre (formant=preserved)."""
+    return ["ffmpeg", "-loglevel", "quiet",
+            "-f", "s16le", "-ar", str(sr), "-ac", "1", "-i", "pipe:0",
+            "-af", f"rubberband=pitch={config.VOICE_PITCH}:formant=preserved",
+            "-f", "s16le", "-ar", str(sr), "-ac", "1", "pipe:1"]
+
+
+class _AplayPlayer:
+    """Pemutar Linux: tulis PCM ke aplay (opsional lewat ffmpeg untuk pitch)."""
+
+    def __init__(self, sr: int):
+        aplay = ["aplay", "-q", "-r", str(sr), "-f", "S16_LE", "-c", "1", "-t", "raw", "-"]
+        if _pitch_aktif():
+            self._ff = subprocess.Popen(_ffmpeg_pitch_cmd(sr),
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+            self._aplay = subprocess.Popen(aplay, stdin=self._ff.stdout)
+            self._ff.stdout.close()
+            self._in, self._procs = self._ff.stdin, [self._ff, self._aplay]
+        else:
+            self._aplay = subprocess.Popen(aplay, stdin=subprocess.PIPE)
+            self._in, self._procs = self._aplay.stdin, [self._aplay]
+
+    def write(self, data: bytes):
+        self._in.write(data)
+
+    def close(self):
+        try:
+            self._in.close()
+        except Exception:
+            pass
+        for p in self._procs:
+            p.wait()
+
+
+class _SoundDevicePlayer:
+    """Pemutar lintas-platform (Windows/macOS) lewat sounddevice (PortAudio).
+
+    Pitch-shift opsional: PCM -> ffmpeg -> dibaca thread -> stream audio.
     """
-    aplay_cmd = ["aplay", "-q", "-r", str(sr), "-f", "S16_LE", "-c", "1", "-t", "raw", "-"]
 
-    if abs(config.VOICE_PITCH - 1.0) < 0.01:
-        player = subprocess.Popen(aplay_cmd, stdin=subprocess.PIPE)
-        return player.stdin, [player]
+    def __init__(self, sr: int):
+        import sounddevice as sd
+        self._stream = sd.RawOutputStream(samplerate=sr, channels=1, dtype="int16")
+        self._stream.start()
+        self._ff = None
+        if _pitch_aktif():
+            self._ff = subprocess.Popen(_ffmpeg_pitch_cmd(sr),
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+            self._reader = threading.Thread(target=self._pump, daemon=True)
+            self._reader.start()
 
-    # formant=preserved menjaga warna/timbre suara tetap natural saat nada
-    # dinaikkan, supaya tidak terdengar tipis/melengking ("cempreng").
-    ff = subprocess.Popen(
-        ["ffmpeg", "-loglevel", "quiet",
-         "-f", "s16le", "-ar", str(sr), "-ac", "1", "-i", "pipe:0",
-         "-af", f"rubberband=pitch={config.VOICE_PITCH}:formant=preserved",
-         "-f", "s16le", "-ar", str(sr), "-ac", "1", "pipe:1"],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-    )
-    player = subprocess.Popen(aplay_cmd, stdin=ff.stdout)
-    ff.stdout.close()  # aplay yang pegang sekarang
-    return ff.stdin, [ff, player]
+    def _pump(self):
+        while True:
+            data = self._ff.stdout.read(4096)
+            if not data:
+                break
+            self._stream.write(data)
+
+    def write(self, data: bytes):
+        if self._ff:
+            self._ff.stdin.write(data)
+        else:
+            self._stream.write(data)
+
+    def close(self):
+        if self._ff:
+            try:
+                self._ff.stdin.close()
+            except Exception:
+                pass
+            self._reader.join()
+            self._ff.wait()
+        self._stream.stop()
+        self._stream.close()
+
+
+def _open_player(sr: int):
+    """Pilih pemutar audio sesuai OS. Punya .write(bytes) dan .close()."""
+    if sys.platform.startswith("linux"):
+        return _AplayPlayer(sr)
+    return _SoundDevicePlayer(sr)
 
 
 def _bersihkan_teks(teks: str) -> str:
@@ -93,17 +156,12 @@ def _piper_stream_play(teks: str) -> None:
     voice = _get_voice()
     sr = voice.config.sample_rate
 
-    target, procs = _open_player(sr)
+    player = _open_player(sr)
     try:
         for chunk in voice.synthesize(teks, _get_syn_config()):
-            target.write(chunk.audio_int16_bytes)
+            player.write(chunk.audio_int16_bytes)
     finally:
-        try:
-            target.close()
-        except Exception:
-            pass
-        for p in procs:
-            p.wait()
+        player.close()
 
 
 def _gtts_play(teks: str) -> None:
@@ -212,7 +270,7 @@ class StreamSpeaker:
             self.enabled = False
             return
         sr = self._voice.config.sample_rate
-        self._target, self._procs = _open_player(sr)
+        self._player = _open_player(sr)
         self._buf = ""
         self._q: "queue.Queue[str | None]" = queue.Queue()
         self._thread = threading.Thread(target=self._worker, daemon=True)
@@ -225,7 +283,7 @@ class StreamSpeaker:
                 break
             try:
                 for audio in self._voice.synthesize(kalimat, _get_syn_config()):
-                    self._target.write(audio.audio_int16_bytes)
+                    self._player.write(audio.audio_int16_bytes)
             except Exception:
                 pass  # satu kalimat gagal -> lewati, jangan ganggu kerja agent
 
@@ -254,12 +312,7 @@ class StreamSpeaker:
         self._buf = ""
         self._q.put(None)
         self._thread.join()
-        try:
-            self._target.close()
-        except Exception:
-            pass
-        for p in self._procs:
-            p.wait()
+        self._player.close()
 
 
 if __name__ == "__main__":
