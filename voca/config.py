@@ -61,3 +61,4 @@ SPEAK_PHONETIC = os.getenv("SPEAK_PHONETIC", "1") != "0"  # eja kata Inggris umu
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")      # tiny..large-v3
 WHISPER_LANG = os.getenv("WHISPER_LANG", "id")
 SAMPLE_RATE = 16000                                      # Whisper butuh 16 kHz mono
+MIN_SPEECH_RMS = float(os.getenv("MIN_SPEECH_RMS", "0.01"))  # energi min dianggap ada ucapan (anti-halusinasi)

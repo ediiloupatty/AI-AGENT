@@ -9,6 +9,8 @@ yang berjalan lokal/offline. Dua mode rekam:
 Dependensi: faster-whisper, sounddevice (butuh PortAudio di sistem).
 """
 
+import re
+
 import numpy as np
 import sounddevice as sd
 from faster_whisper import WhisperModel
@@ -18,6 +20,18 @@ from . import config
 SAMPLE_RATE = config.SAMPLE_RATE
 
 _model = None
+
+# Frasa yang sering "dikarang" Whisper saat audio hening/noise (halusinasi).
+# Model Indonesia paling sering memunculkan kalimat penutup video YouTube.
+_HALUSINASI = {
+    "terima kasih telah menonton", "terima kasih sudah menonton",
+    "terima kasih karena menonton", "terimakasih karena menonton",
+    "terima kasih banyak", "terima kasih", "terimakasih",
+    "jangan lupa subscribe", "jangan lupa like dan subscribe",
+    "tolong berlangganan", "sampai jumpa di video selanjutnya",
+    "thank you for watching", "thanks for watching", "thank you",
+    "please subscribe", "you", "bye", "silakan", "terjemahan",
+}
 
 
 def _get_model() -> WhisperModel:
@@ -76,11 +90,45 @@ def record_until_silence(max_seconds: float = 15.0,
     return np.concatenate(frames, axis=0).flatten()
 
 
+def _terlalu_hening(audio) -> bool:
+    """True kalau energi audio terlalu kecil (kemungkinan cuma hening/noise)."""
+    if audio is None or len(audio) == 0:
+        return True
+    rms = float(np.sqrt(np.mean(np.square(audio))))
+    return rms < config.MIN_SPEECH_RMS
+
+
+def _is_halusinasi(teks: str) -> bool:
+    """True kalau teks cuma frasa halusinasi khas Whisper (bukan ucapan asli)."""
+    bersih = re.sub(r"[^\w\s]", "", teks.lower()).strip()
+    return bersih in _HALUSINASI
+
+
 def transcribe(audio) -> str:
-    """Ubah audio (numpy array atau path file) jadi teks."""
+    """Ubah audio jadi teks. VAD + filter halusinasi agar hening tak jadi teks."""
+    # Lapis 1: audio terlalu pelan -> anggap tak ada ucapan (skip Whisper).
+    if not isinstance(audio, str) and _terlalu_hening(audio):
+        return ""
+
     model = _get_model()
-    segments, _info = model.transcribe(audio, language=config.WHISPER_LANG, beam_size=5)
-    return " ".join(seg.text for seg in segments).strip()
+    # Lapis 2: VAD bawaan + cegah halusinasi berulang.
+    segments, _info = model.transcribe(
+        audio,
+        language=config.WHISPER_LANG,
+        beam_size=5,
+        vad_filter=True,
+        condition_on_previous_text=False,
+        no_speech_threshold=0.6,
+    )
+    teks = " ".join(
+        seg.text for seg in segments
+        if getattr(seg, "no_speech_prob", 0.0) < 0.6
+    ).strip()
+
+    # Lapis 3: jaring pengaman frasa halusinasi khas.
+    if _is_halusinasi(teks):
+        return ""
+    return teks
 
 
 def listen() -> str:

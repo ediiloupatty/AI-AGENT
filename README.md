@@ -192,6 +192,7 @@ Semua diatur lewat environment variable atau file `.env`.
 | `PIPER_MODEL` | model ID | Path model Piper lain. |
 | `SPEAK_PHONETIC` | `1` | `0` = jangan eja-ulang kata Inggris saat bicara. Mengoreksi lafal kata seperti *file*, *commit*, *error* (hanya audio, teks tak berubah). |
 | `WHISPER_MODEL` | `small` | Ukuran STT: `tiny`/`base`/`small`/`medium`/`large-v3`. |
+| `MIN_SPEECH_RMS` | `0.01` | Ambang energi minimum dianggap ada ucapan. Naikkan kalau masih ada teks "hantu" saat diam; turunkan kalau suara pelanmu terabaikan. |
 
 ### Perilaku agent (hemat & andal)
 
