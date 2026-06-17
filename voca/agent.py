@@ -16,6 +16,7 @@ Dua mode: teks (default) dan hands-free (`--voice`).
 import json
 import re
 import sys
+from pathlib import Path
 
 from openai import OpenAI
 
@@ -98,7 +99,11 @@ Tools yang ada:
 - search_files: cari teks/kode cepat (seperti grep) — pakai ini buat menemukan
   sesuatu SEBELUM membaca file besar, lebih hemat.
 - read_file: baca file (pakai start_line & end_line untuk baca sebagian saja).
-- write_file & run_command: mengubah sistem, otomatis minta konfirmasi user.
+- edit_file: ubah SEBAGIAN file yang sudah ada (ganti potongan teks). PAKAI INI
+  untuk mengedit, BUKAN write_file — jauh lebih hemat & akurat.
+- write_file: buat file BARU atau timpa total (jarang dipakai untuk edit).
+- run_command: jalankan perintah terminal (output tampil live).
+Aksi yang mengubah sistem (edit/tulis/command) otomatis minta konfirmasi user.
 
 Cara kerja (PENTING):
 - Kalau disuruh ngerjain sesuatu, LANGSUNG kerjakan via tool. Jangan banyak
@@ -125,20 +130,86 @@ def _ringkas_args(args: dict, batas: int = 80) -> str:
     return ", ".join(bagian)
 
 
-def _pangkas_history(messages):
-    """Batasi panjang history biar hemat token & tak overflow context.
+def _estimasi_token(messages) -> int:
+    """Perkiraan kasar jumlah token (heuristik karakter/token)."""
+    total = 0
+    for m in messages:
+        total += len(str(m.get("content") or ""))
+        for tc in (m.get("tool_calls") or []):
+            total += len(str(tc.get("function", {}).get("arguments") or ""))
+    return int(total / config.CHARS_PER_TOKEN)
 
-    Simpan pesan system (paling depan) + ekor pesan terbaru. Pemotongan selalu
-    dimulai di pesan 'user' supaya pasangan tool_call/tool tak terputus — kalau
-    terputus, API DashScope akan menolak request.
+
+def _pangkas_history(messages):
+    """Batasi history biar hemat token & tak overflow context.
+
+    Dua lapis: (1) batas jumlah pesan, (2) batas estimasi token. Pemotongan
+    selalu per-giliran utuh dan menyisakan system di depan, sehingga pasangan
+    tool_call/tool tak terputus (kalau terputus, DashScope menolak request).
     """
-    if len(messages) - 1 <= config.MAX_HISTORY:  # -1 untuk pesan system
+    if not messages:
         return
     system = messages[0]
-    ekor = messages[-config.MAX_HISTORY:]
-    while ekor and ekor[0].get("role") != "user":
-        ekor.pop(0)
-    messages[:] = [system] + ekor
+
+    # Lapis 1: batas jumlah pesan.
+    if len(messages) - 1 > config.MAX_HISTORY:  # -1 untuk pesan system
+        ekor = messages[-config.MAX_HISTORY:]
+        while ekor and ekor[0].get("role") != "user":
+            ekor.pop(0)
+        messages[:] = [system] + ekor
+
+    # Lapis 2: batas token — buang giliran terlama (mulai dari pesan 'user').
+    while _estimasi_token(messages) > config.MAX_HISTORY_TOKENS and len(messages) > 2:
+        del messages[1]
+        while len(messages) > 2 and messages[1].get("role") != "user":
+            del messages[1]
+
+
+# ---------------------------------------------------------------------------
+# Simpan & lanjutkan sesi (resume)
+# ---------------------------------------------------------------------------
+def _session_path() -> Path:
+    return WORKSPACE / config.SESSION_FILE
+
+
+def _simpan_sesi(messages) -> None:
+    """Simpan history ke file sesi (diam-diam; gagal tak mengganggu kerja)."""
+    if not config.SESSION_ENABLED:
+        return
+    try:
+        p = _session_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(messages, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _muat_sesi():
+    """Muat sesi tersimpan kalau ada & valid; else None."""
+    if not config.SESSION_ENABLED:
+        return None
+    try:
+        p = _session_path()
+        if not p.exists():
+            return None
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if isinstance(data, list) and any(m.get("role") == "user" for m in data):
+            return data
+    except Exception:
+        pass
+    return None
+
+
+def _tanya_resume(messages) -> bool:
+    """Tanya user apakah mau lanjut dari sesi sebelumnya."""
+    giliran = sum(1 for m in messages if m.get("role") == "user")
+    try:
+        jawab = input(
+            f"{_DIM}Ada sesi sebelumnya ({giliran} giliran). Lanjutkan? [y/N]{_RESET} "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return jawab in ("y", "yes", "ya")
 
 
 def hubungkan_tool(client, messages):
@@ -300,6 +371,7 @@ def run_text_mode(client, messages):
             hubungkan_tool(client, messages)
         except Exception as e:
             print(f"\n{_RED}Error:{_RESET} {e}")
+        _simpan_sesi(messages)
 
 
 def run_handsfree_mode(client, messages):
@@ -335,6 +407,7 @@ def run_handsfree_mode(client, messages):
             hubungkan_tool(client, messages)
         except Exception as e:
             print(f"\n{_RED}Error:{_RESET} {e}")
+        _simpan_sesi(messages)
 
 
 def main():
@@ -349,6 +422,13 @@ def main():
         {"role": "system",
          "content": f"Struktur folder kerja saat ini ({WORKSPACE}):\n{list_files('.')}"},
     ]
+
+    # Lanjutkan sesi sebelumnya kalau ada & user setuju.
+    tersimpan = _muat_sesi()
+    if tersimpan and _tanya_resume(tersimpan):
+        messages = tersimpan
+        print(f"{_DIM}Sesi dilanjutkan.{_RESET}")
+
     warmup()  # muat model suara di awal agar balasan pertama tidak tertunda
 
     # Mode hands-free kalau dijalankan dengan flag --voice / --suara.

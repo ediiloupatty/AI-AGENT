@@ -38,6 +38,13 @@ LIST_MAX_ENTRIES = int(os.getenv("LIST_MAX_ENTRIES", "400"))   # jumlah baris ma
 SEARCH_MAX_RESULTS = int(os.getenv("SEARCH_MAX_RESULTS", "60"))  # hasil maks search_files
 SHOW_DIFF = os.getenv("SHOW_DIFF", "1") != "0"                 # tampilkan diff saat edit file
 DIFF_MAX_LINES = int(os.getenv("DIFF_MAX_LINES", "200"))       # batas baris diff yang dicetak
+COMMAND_TIMEOUT = int(os.getenv("COMMAND_TIMEOUT", "300"))     # batas waktu run_command (detik)
+MAX_HISTORY_TOKENS = int(os.getenv("MAX_HISTORY_TOKENS", "12000"))  # estimasi token maks history
+CHARS_PER_TOKEN = float(os.getenv("CHARS_PER_TOKEN", "3.5"))   # heuristik estimasi token
+
+# --- Sesi: simpan & lanjutkan percakapan ------------------------------------
+SESSION_ENABLED = os.getenv("SESSION_ENABLED", "1") != "0"     # 0 = jangan simpan sesi
+SESSION_FILE = os.getenv("SESSION_FILE", ".voca/session.json")  # relatif ke folder kerja
 
 # --- Suara keluar: TTS Piper (lokal/offline) -------------------------------
 VOICE_ENABLED = os.getenv("VOICE_ENABLED", "1") != "0"

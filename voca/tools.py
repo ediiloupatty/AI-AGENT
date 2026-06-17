@@ -11,7 +11,10 @@ MEMINTA KONFIRMASI ke user terlebih dahulu sebelum dieksekusi.
 
 import difflib
 import os
+import select
+import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from . import config
@@ -23,7 +26,7 @@ _HIJAU, _MERAH, _CYAN, _DIM, _TEBAL, _RESET = (
 
 # Folder berat/tak relevan yang dilewati saat menyusuri (list & search).
 _IGNORE_DIRS = {
-    ".git", "__pycache__", "node_modules", ".venv", "venv",
+    ".git", "__pycache__", "node_modules", ".venv", "venv", ".voca",
     ".mypy_cache", ".pytest_cache", "dist", "build", ".next", ".idea",
 }
 
@@ -144,12 +147,31 @@ def read_file(path: str, start_line: int = None, end_line: int = None) -> str:
     return teks
 
 
-def search_files(query: str, path: str = ".") -> str:
-    """Cari teks/kode di seluruh file dalam folder kerja (seperti grep)."""
-    base = _resolve_safe(path)
-    if not base.exists():
-        return f"Path '{path}' tidak ditemukan."
+def _search_ripgrep(query: str, rel_path: str) -> str | None:
+    """Cari pakai ripgrep (cepat). Return None kalau rg error -> fallback Python."""
+    cmd = ["rg", "--no-heading", "--line-number", "--color", "never",
+           "-S", "--max-filesize", "1M"]
+    for d in _IGNORE_DIRS:
+        cmd += ["--glob", f"!**/{d}/**"]
+    cmd += ["--", query, rel_path]
+    try:
+        proc = subprocess.run(cmd, cwd=WORKSPACE, capture_output=True,
+                              text=True, timeout=30)
+    except Exception:
+        return None
+    if proc.returncode not in (0, 1):  # 0=ketemu, 1=tak ada, lainnya=error
+        return None
+    out = proc.stdout.splitlines()
+    if not out:
+        return f"Tidak ada hasil untuk '{query}'."
+    hasil = [ln[:260] for ln in out[:config.SEARCH_MAX_RESULTS]]
+    if len(out) > config.SEARCH_MAX_RESULTS:
+        hasil.append(f"... (dipotong di {config.SEARCH_MAX_RESULTS} hasil)")
+    return "\n".join(hasil)
 
+
+def _search_python(query: str, base: Path) -> str:
+    """Pencarian murni Python (fallback bila ripgrep tak ada)."""
     q = query.lower()
     hasil = []
     for root, dirs, files in os.walk(base):
@@ -170,6 +192,24 @@ def search_files(query: str, path: str = ".") -> str:
                         hasil.append(f"... (dipotong di {config.SEARCH_MAX_RESULTS} hasil)")
                         return "\n".join(hasil)
     return "\n".join(hasil) if hasil else f"Tidak ada hasil untuk '{query}'."
+
+
+def search_files(query: str, path: str = ".") -> str:
+    """Cari teks/kode di seluruh file dalam folder kerja (seperti grep).
+
+    Pakai ripgrep (`rg`) bila tersedia — jauh lebih cepat — kalau tidak ada
+    atau gagal, jatuh ke pencarian Python.
+    """
+    base = _resolve_safe(path)
+    if not base.exists():
+        return f"Path '{path}' tidak ditemukan."
+
+    if shutil.which("rg"):
+        rel = os.path.relpath(base, WORKSPACE)
+        hasil = _search_ripgrep(query, rel)
+        if hasil is not None:
+            return hasil
+    return _search_python(query, base)
 
 
 def _tampilkan_diff(path: str, lama: str, baru: str) -> tuple[int, int]:
@@ -233,23 +273,116 @@ def write_file(path: str, content: str) -> str:
         return f"Gagal menulis '{path}': {e}"
 
 
-def run_command(command: str) -> str:
-    """Jalankan perintah terminal. MINTA KONFIRMASI dulu."""
-    if not _confirm(f"Agent ingin menjalankan: `{command}`. Lanjut?"):
-        return "Dibatalkan oleh user. Command tidak dijalankan."
+def edit_file(path: str, old_string: str, new_string: str) -> str:
+    """Ganti satu potongan teks di file (find/replace). MINTA KONFIRMASI dulu.
+
+    Jauh lebih hemat daripada write_file untuk mengedit file yang sudah ada:
+    cukup kirim potongan lama & penggantinya, bukan seluruh isi file.
+    old_string harus cocok PERSIS dan UNIK di dalam file.
+    """
+    target = _resolve_safe(path)
+    if not target.exists():
+        return f"File '{path}' tidak ada. Pakai write_file untuk membuat file baru."
+    try:
+        lama = target.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        return f"Gagal membaca '{path}': {e}"
+
+    jumlah = lama.count(old_string)
+    if jumlah == 0:
+        return (f"Teks tak ditemukan di '{path}'. Pastikan old_string sama persis "
+                f"(termasuk spasi & indentasi).")
+    if jumlah > 1:
+        return (f"Teks muncul {jumlah}x di '{path}' — tidak unik. Perluas old_string "
+                f"dengan konteks di sekitarnya supaya unik.")
+    if old_string == new_string:
+        return "Tidak ada perubahan (old_string sama dengan new_string)."
+
+    baru = lama.replace(old_string, new_string, 1)
+    tambah, hapus = _tampilkan_diff(path, lama, baru)
+    if not _confirm(f"Agent ingin mengedit '{path}' (+{tambah}/-{hapus} baris). Lanjut?"):
+        return f"Dibatalkan oleh user. File '{path}' tidak diubah."
+    try:
+        target.write_text(baru, encoding="utf-8")
+        return f"Berhasil mengedit '{path}' (+{tambah}/-{hapus} baris)."
+    except Exception as e:
+        return f"Gagal menulis '{path}': {e}"
+
+
+def _run_blocking(command: str) -> str:
+    """Jalankan command tanpa streaming (fallback non-POSIX)."""
     try:
         hasil = subprocess.run(
             command, shell=True, cwd=WORKSPACE,
-            capture_output=True, text=True, timeout=120,
+            capture_output=True, text=True, timeout=config.COMMAND_TIMEOUT,
         )
-        out = ((hasil.stdout or "") + (hasil.stderr or "")).strip() or "(tanpa output)"
-        if len(out) > config.MAX_OUTPUT_CHARS:
-            out = out[:config.MAX_OUTPUT_CHARS] + f"\n... (output dipotong di {config.MAX_OUTPUT_CHARS} karakter)"
-        return f"(exit code {hasil.returncode})\n{out}"
     except subprocess.TimeoutExpired:
-        return "Command dihentikan: melebihi batas waktu 120 detik."
+        return f"Command dihentikan: melebihi {config.COMMAND_TIMEOUT} detik."
     except Exception as e:
         return f"Gagal menjalankan command: {e}"
+    out = ((hasil.stdout or "") + (hasil.stderr or "")).strip() or "(tanpa output)"
+    if len(out) > config.MAX_OUTPUT_CHARS:
+        out = out[:config.MAX_OUTPUT_CHARS] + f"\n... (output dipotong di {config.MAX_OUTPUT_CHARS} karakter)"
+    return f"(exit code {hasil.returncode})\n{out}"
+
+
+def run_command(command: str) -> str:
+    """Jalankan perintah terminal dengan output LIVE. MINTA KONFIRMASI dulu.
+
+    Output ditampilkan baris-demi-baris saat berjalan (enak untuk test, build,
+    install). Bisa dibatalkan dengan Ctrl+C; ada batas waktu COMMAND_TIMEOUT.
+    """
+    if not _confirm(f"Agent ingin menjalankan: `{command}`. Lanjut?"):
+        return "Dibatalkan oleh user. Command tidak dijalankan."
+
+    if os.name != "posix":  # streaming via select hanya andal di POSIX
+        return _run_blocking(command)
+
+    print(f"{_DIM}  $ {command}{_RESET}")
+    try:
+        proc = subprocess.Popen(
+            command, shell=True, cwd=WORKSPACE,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, bufsize=1,
+        )
+    except Exception as e:
+        return f"Gagal menjalankan command: {e}"
+
+    potongan, total = [], 0
+    start = time.monotonic()
+    try:
+        while True:
+            sisa = config.COMMAND_TIMEOUT - (time.monotonic() - start)
+            if sisa <= 0:
+                proc.kill(); proc.wait()
+                ekor = "".join(potongan).strip()
+                return f"Command dihentikan: melebihi {config.COMMAND_TIMEOUT} detik.\n{ekor}".strip()
+            ready, _, _ = select.select([proc.stdout], [], [], min(sisa, 0.5))
+            if ready:
+                line = proc.stdout.readline()
+                if line == "":
+                    break  # EOF: proses selesai
+                print(f"{_DIM}  │{_RESET} {line}", end="", flush=True)
+                if total < config.MAX_OUTPUT_CHARS:
+                    potongan.append(line)
+                    total += len(line)
+            elif proc.poll() is not None:
+                break  # proses selesai, tak ada output baru
+    except KeyboardInterrupt:
+        proc.kill(); proc.wait()
+        print(f"\n{_DIM}  (dibatalkan dengan Ctrl+C){_RESET}")
+        return "Command dibatalkan oleh user (Ctrl+C)."
+    finally:
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
+    proc.wait()
+
+    out = "".join(potongan).strip() or "(tanpa output)"
+    if total >= config.MAX_OUTPUT_CHARS:
+        out += f"\n... (output dipotong di {config.MAX_OUTPUT_CHARS} karakter)"
+    return f"(exit code {proc.returncode})\n{out}"
 
 
 # ---------------------------------------------------------------------------
@@ -307,8 +440,29 @@ TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
+            "name": "edit_file",
+            "description": "Edit file yang SUDAH ADA dengan mengganti satu potongan "
+                           "teks (find/replace). Pakai ini, BUKAN write_file, untuk "
+                           "mengubah sebagian file — jauh lebih hemat & akurat. "
+                           "old_string harus cocok persis dan unik.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Path file yang diedit"},
+                    "old_string": {"type": "string", "description": "Teks lama (persis & unik)"},
+                    "new_string": {"type": "string", "description": "Teks pengganti"},
+                },
+                "required": ["path", "old_string", "new_string"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "write_file",
-            "description": "Tulis atau timpa sebuah file. Akan minta konfirmasi user.",
+            "description": "Buat file BARU atau timpa seluruh isi file. Untuk "
+                           "mengubah sebagian file yang sudah ada, pakai edit_file. "
+                           "Akan minta konfirmasi user.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -340,6 +494,7 @@ TOOL_FUNCTIONS = {
     "list_files": list_files,
     "search_files": search_files,
     "read_file": read_file,
+    "edit_file": edit_file,
     "write_file": write_file,
     "run_command": run_command,
 }

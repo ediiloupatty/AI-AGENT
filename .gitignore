@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 *.mp3
 models/*.onnx
+.voca/
+.pytest_cache/

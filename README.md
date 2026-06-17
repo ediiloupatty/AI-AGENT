@@ -152,10 +152,11 @@ Voca menyelesaikan tugas dengan memanggil tool berikut secara mandiri:
 | Tool | Fungsi | Konfirmasi |
 |------|--------|:---------:|
 | `list_files` | Lihat struktur folder kerja (dibatasi kedalaman & jumlah). | — |
-| `search_files` | Cari teks/kode di seluruh folder (seperti `grep`). | — |
+| `search_files` | Cari teks/kode di seluruh folder — pakai `ripgrep` bila ada, fallback Python. | — |
 | `read_file` | Baca isi file; bisa per rentang baris (`start_line`/`end_line`). | — |
-| `write_file` | Tulis/timpa file — menampilkan **diff berwarna** lebih dulu. | ✅ |
-| `run_command` | Jalankan perintah terminal di folder kerja. | ✅ |
+| `edit_file` | Edit sebagian file (find/replace) — hemat & akurat, dengan **diff berwarna**. | ✅ |
+| `write_file` | Buat file baru / timpa total — menampilkan **diff berwarna** lebih dulu. | ✅ |
+| `run_command` | Jalankan perintah terminal dengan **output live**, bisa di-Ctrl+C. | ✅ |
 
 ---
 
@@ -189,13 +190,26 @@ Semua diatur lewat environment variable atau file `.env`.
 |----------|---------|--------|
 | `MAX_TOOL_ITERS` | `15` | Maks putaran tool per giliran (anti muter selamanya). |
 | `MAX_HISTORY` | `30` | Maks pesan disimpan (anti boros token & overflow context). |
+| `MAX_HISTORY_TOKENS` | `12000` | Batas estimasi token history (pemangkasan kedua). |
+| `CHARS_PER_TOKEN` | `3.5` | Heuristik estimasi token (karakter per token). |
 | `MAX_READ_CHARS` | `20000` | Batas karakter saat baca file utuh. |
 | `MAX_OUTPUT_CHARS` | `8000` | Batas karakter output `run_command`. |
+| `COMMAND_TIMEOUT` | `300` | Batas waktu `run_command` (detik). |
 | `LIST_MAX_DEPTH` | `4` | Kedalaman maksimum `list_files`. |
 | `LIST_MAX_ENTRIES` | `400` | Jumlah baris maksimum `list_files`. |
 | `SEARCH_MAX_RESULTS` | `60` | Hasil maksimum `search_files`. |
 | `SHOW_DIFF` | `1` | `0` = jangan tampilkan diff saat edit file. |
 | `DIFF_MAX_LINES` | `200` | Batas baris diff yang dicetak. |
+
+### Sesi (simpan & lanjutkan)
+
+| Variabel | Default | Fungsi |
+|----------|---------|--------|
+| `SESSION_ENABLED` | `1` | `0` = jangan simpan/lanjutkan sesi. |
+| `SESSION_FILE` | `.voca/session.json` | Lokasi file sesi (relatif ke folder kerja). |
+
+Saat `voca` dijalankan di folder yang punya sesi tersimpan, ia menawarkan untuk
+**melanjutkan percakapan sebelumnya**.
 
 **Contoh:**
 
@@ -213,24 +227,39 @@ voice-coding-assistant/
 ├── voca/                 # paket utama
 │   ├── __main__.py       # entry: python -m voca [--voice]
 │   ├── config.py         # SEMUA setting & path terpusat di sini
-│   ├── agent.py          # otak: loop LLM + tool use + manajemen history
-│   ├── tools.py          # tangan: list/search/read/write file, run command, diff
+│   ├── agent.py          # otak: loop LLM + tool use + history + sesi + UI
+│   ├── tools.py          # tangan: list/search/read/edit/write, run command, diff
 │   ├── voice.py          # mulut: TTS Piper (+ fallback gTTS)
 │   └── listen.py         # telinga: STT Whisper
+├── tests/                # tes pytest (tanpa API/audio)
+├── .github/workflows/    # CI GitHub Actions
 ├── models/               # model suara Piper (.onnx, tidak ikut git)
 ├── install.sh            # pemasang satu-perintah (Linux)
-├── requirements.txt
+├── requirements.txt      # dependensi runtime
+├── requirements-dev.txt  # + pytest untuk pengembangan
 └── .env                  # API key & setting (tidak ikut git)
 ```
 
 ---
 
-## 🧪 Tes Per-Komponen
+## 🧪 Tes & Pengembangan
+
+Tes per-komponen (manual):
 
 ```bash
 python -m voca.voice     # tes suara keluar (TTS)
 python -m voca.listen    # tes mikrofon + transkripsi (STT)
 ```
+
+Tes otomatis (pytest) — tidak butuh API key, mikrofon, atau model suara:
+
+```bash
+pip install -r requirements-dev.txt
+pytest -q
+```
+
+Tes berjalan otomatis di **GitHub Actions** (Python 3.9 / 3.11 / 3.12) pada
+setiap push & pull request — lihat `.github/workflows/ci.yml`.
 
 ---
 
