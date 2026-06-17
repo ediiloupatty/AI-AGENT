@@ -132,6 +132,37 @@ def _open_player(sr: int):
     return _SoundDevicePlayer(sr)
 
 
+# Ejaan fonetik kata Inggris umum -> agar Piper (model Indonesia) membacanya
+# mendekati lafal Inggris. Hanya untuk SUARA; teks di layar tidak diubah.
+_PHONETIC = {
+    "file": "fail", "files": "fail",
+    "error": "eror", "errors": "eror",
+    "bug": "bag", "bugs": "bag", "debug": "dibag",
+    "code": "kod", "coding": "koding",
+    "commit": "komit", "commits": "komit",
+    "command": "komand", "commands": "komand",
+    "function": "fangsyen", "functions": "fangsyen",
+    "update": "apdet", "updates": "apdet",
+    "install": "instol", "deploy": "diploi",
+    "python": "paiton", "cache": "kesh", "queue": "kiyu",
+    "request": "rikues", "response": "rispons",
+    "return": "ritern", "value": "valyu", "values": "valyu",
+    "merge": "merj", "branch": "brench", "branches": "brenches",
+    "save": "seiv", "default": "difolt", "range": "reinj",
+    "true": "tru", "false": "fols", "null": "nal",
+    "username": "yusernem", "password": "paswor",
+}
+_PHONETIC_RE = re.compile(
+    r"\b(" + "|".join(sorted(_PHONETIC, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _eja_inggris(teks: str) -> str:
+    """Ganti kata Inggris umum dengan ejaan fonetik Indonesia (per kata utuh)."""
+    return _PHONETIC_RE.sub(lambda m: _PHONETIC[m.group(0).lower()], teks)
+
+
 def _bersihkan_teks(teks: str) -> str:
     """Buang elemen yang tidak enak dibacakan: kode, emoji, markdown, URL."""
     teks = re.sub(r"```.*?```", " ", teks, flags=re.DOTALL)   # blok kode
@@ -144,6 +175,8 @@ def _bersihkan_teks(teks: str) -> str:
         " ", teks,
     )
     teks = re.sub(r"\s+", " ", teks).strip()                  # rapikan spasi
+    if config.SPEAK_PHONETIC:
+        teks = _eja_inggris(teks)                             # lafalkan kata Inggris
     return teks
 
 

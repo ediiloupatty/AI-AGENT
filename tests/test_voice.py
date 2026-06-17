@@ -22,3 +22,19 @@ def test_bersihkan_teks_buang_markdown_kode_url_emoji():
     assert "http" not in out
     assert "🎉" not in out
     assert "tebal" in out and "selesai" in out
+
+
+def test_eja_inggris_kata_umum():
+    out = voice._eja_inggris("cek file dan commit lalu deploy")
+    assert "fail" in out and "komit" in out and "diploi" in out
+    assert "file" not in out
+
+
+def test_eja_inggris_case_insensitive():
+    assert voice._eja_inggris("ERROR di Function") == "eror di fangsyen"
+
+
+def test_eja_inggris_tidak_sentuh_substring():
+    # 'file' di dalam 'Profile'/'filename' tak boleh diganti (harus kata utuh)
+    out = voice._eja_inggris("Profile dan filename")
+    assert out == "Profile dan filename"

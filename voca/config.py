@@ -53,6 +53,7 @@ VOICE_PITCH = float(os.getenv("VOICE_PITCH", "1.1"))     # nada: >1 lebih tinggi
 VOICE_SPEED = float(os.getenv("VOICE_SPEED", "1.12"))    # tempo: >1 lebih pelan
 VOICE_VOLUME = float(os.getenv("VOICE_VOLUME", "0.9"))   # 0..1: kecil = lembut
 VOICE_LANG = os.getenv("VOICE_LANG", "id")               # untuk fallback gTTS
+SPEAK_PHONETIC = os.getenv("SPEAK_PHONETIC", "1") != "0"  # eja kata Inggris umum saat bicara
 
 # --- Suara masuk: STT Whisper (lokal/offline) ------------------------------
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")      # tiny..large-v3
