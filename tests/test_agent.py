@@ -1,6 +1,40 @@
 """Tes untuk voca/agent.py — ringkas args, trim history, estimasi token, sesi."""
 
+import io
+import sys
+
 from voca import agent, config
+
+
+def _render_bold(chunks):
+    """Jalankan _BoldPrinter atas potongan stream, kembalikan teks tercetak."""
+    buf, old = io.StringIO(), sys.stdout
+    sys.stdout = buf
+    try:
+        bp = agent._BoldPrinter()
+        for c in chunks:
+            bp.feed(c)
+        bp.close()
+    finally:
+        sys.stdout = old
+    return buf.getvalue()
+
+
+def test_bold_satu_chunk():
+    assert _render_bold(["ini **tebal** ya"]) == f"ini {agent._BOLD}tebal{agent._RESET} ya"
+
+
+def test_bold_terpotong_antar_chunk():
+    assert _render_bold(["halo *", "* x *", "* y"]) == \
+        f"halo {agent._BOLD} x {agent._RESET} y"
+
+
+def test_bintang_tunggal_apa_adanya():
+    assert _render_bold(["a * b"]) == "a * b"
+
+
+def test_bold_belum_ditutup_direset():
+    assert _render_bold(["**belum tutup"]) == f"{agent._BOLD}belum tutup{agent._RESET}"
 
 
 def test_ringkas_args_potong_panjang():

@@ -73,6 +73,50 @@ def _hint(teks: str) -> None:
     print(f"{_DIM}{teks}{_RESET}\n")
 
 
+class _BoldPrinter:
+    """Cetak teks streaming sambil ubah **tebal** (markdown) jadi bold ANSI asli.
+
+    Tahan terhadap '**' yang kepotong antar-chunk: '*' di ujung ditahan dulu
+    sampai karakter berikutnya datang, baru diputuskan toggle bold atau bukan.
+    """
+
+    def __init__(self):
+        self._pending = ""   # '*' tunggal yang belum pasti pasangannya
+        self._bold = False
+
+    def feed(self, teks: str) -> None:
+        s = self._pending + teks
+        self._pending = ""
+        out = []
+        i = 0
+        while i < len(s):
+            if s[i] == "*":
+                if i + 1 == len(s):           # '*' di ujung -> tunggu chunk berikut
+                    self._pending = "*"
+                    break
+                if s[i + 1] == "*":           # '**' -> toggle bold
+                    self._bold = not self._bold
+                    out.append(_BOLD if self._bold else _RESET)
+                    i += 2
+                    continue
+                out.append("*")               # '*' tunggal -> apa adanya
+            else:
+                out.append(s[i])
+            i += 1
+        if out:
+            sys.stdout.write("".join(out))
+            sys.stdout.flush()
+
+    def close(self) -> None:
+        if self._pending:
+            sys.stdout.write(self._pending)
+            self._pending = ""
+        if self._bold:                        # tutup bold yang belum sempat ditutup
+            sys.stdout.write(_RESET)
+            self._bold = False
+        sys.stdout.flush()
+
+
 SYSTEM_PROMPT = """Kamu adalah Voca, asisten coding berbasis suara.
 
 Gaya bicara:
@@ -230,6 +274,7 @@ def hubungkan_tool(client, messages):
         # Speaker latar: mulai membacakan per kalimat begitu kalimat siap,
         # sambil teks berikutnya masih mengalir (lewat satu aliran, tanpa jeda).
         speaker = StreamSpeaker()
+        pencetak = _BoldPrinter()  # **tebal** -> bold ANSI saat dicetak
 
         print("\n", end="", flush=True)
         for chunk in stream:
@@ -238,7 +283,7 @@ def hubungkan_tool(client, messages):
             delta = chunk.choices[0].delta
 
             if getattr(delta, "content", None):
-                print(delta.content, end="", flush=True)
+                pencetak.feed(delta.content)
                 text_parts.append(delta.content)
                 speaker.feed(delta.content)
 
@@ -250,6 +295,7 @@ def hubungkan_tool(client, messages):
                     slot["name"] = tc.function.name
                 if tc.function and tc.function.arguments:
                     slot["args"] += tc.function.arguments
+        pencetak.close()
         print()
 
         # Tunggu sisa narasi selesai diucapkan sebelum lanjut (mis. jalankan tool).
