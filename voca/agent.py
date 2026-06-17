@@ -50,6 +50,18 @@ selangkah, langsung lakukan via tool (jangan cuma janji), dan ingat — kalimatm
 akan diucapkan lewat suara, jadi ringkas."""
 
 
+def _ringkas_args(args: dict, batas: int = 80) -> str:
+    """Ringkas argumen tool untuk dicetak — potong nilai panjang (mis. isi file)
+    agar terminal tidak banjir teks dan langsung berhenti di prompt."""
+    bagian = []
+    for k, v in args.items():
+        s = str(v).replace("\n", "\\n")
+        if len(s) > batas:
+            s = s[:batas] + f"…(+{len(s) - batas} char)"
+        bagian.append(f"{k}={s}")
+    return ", ".join(bagian)
+
+
 def _pangkas_history(messages):
     """Batasi panjang history biar hemat token & tak overflow context.
 
@@ -134,7 +146,7 @@ def hubungkan_tool(client, messages):
                 args = json.loads(tc["args"]) if tc["args"] else {}
             except json.JSONDecodeError:
                 args = {}
-            print(f"\n   🔧 {tc['name']}({args})")
+            print(f"\n   🔧 {tc['name']}({_ringkas_args(args)})")
 
             if fungsi is None:
                 hasil = f"Tool tidak dikenal: {tc['name']}"
