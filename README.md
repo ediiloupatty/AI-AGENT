@@ -1,4 +1,4 @@
-# 🎙️ AI Coding Companion
+# 🎙️ Voca — AI Coding Assistant
 
 Rekan ngoding berbasis **suara**: kamu beri perintah (ketik atau ngomong), ia
 menganalisis folder kerja, mengerjakan tugas, dan **menarasikan progresnya
@@ -11,14 +11,14 @@ aktif berkomunikasi.
 
 ## Install cepat (Linux)
 
-Satu baris — otomatis unduh kode, buat venv, install dependensi, unduh model
-suara, dan pasang perintah `kong`:
+Satu perintah — otomatis unduh kode, buat venv, install dependensi, unduh model
+suara, minta API key, dan pasang perintah `voca`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ediiloupatty/AI-AGENT/main/install.sh | bash
 ```
 
-Setelah itu: isi API key Qwen di `~/.kong/.env`, lalu jalankan `kong`.
+Setelah itu langsung jalankan `voca`.
 
 > Butuh `python3`, `git`, `curl`, plus `ffmpeg`, `alsa-utils` (aplay), dan
 > PortAudio untuk suara. Tiap pengguna memakai **API key Qwen sendiri**.
@@ -28,8 +28,8 @@ Setelah itu: isi API key Qwen di `~/.kong/.env`, lalu jalankan `kong`.
 
 ```
 ai/
-├── companion/            # paket utama
-│   ├── __main__.py       # entry: python -m companion [--voice]
+├── voca/                 # paket utama
+│   ├── __main__.py       # entry: python -m voca [--voice]
 │   ├── config.py         # SEMUA setting & path terpusat di sini
 │   ├── agent.py          # otak: loop LLM + tool use
 │   ├── tools.py          # tangan: list/read/write file, run command
@@ -40,7 +40,7 @@ ai/
 └── .env                  # API key & setting (tidak ikut git)
 ```
 
-## Setup
+## Setup manual (tanpa install.sh)
 
 ```bash
 # 1. virtual environment
@@ -65,12 +65,12 @@ Dependensi sistem: **aplay** (alsa-utils) & **ffmpeg** untuk audio,
 ## Menjalankan
 
 ```bash
-kong                 # mode teks (folder saat ini jadi area kerja, ala Claude CLI)
-kong --voice         # mode hands-free penuh (ngomong → kerja → lapor suara)
+voca                 # mode teks (folder saat ini jadi area kerja)
+voca --voice         # mode hands-free penuh (ngomong → kerja → lapor suara)
 
-# tanpa perintah global 'kong':
-python -m companion
-python -m companion --voice
+# tanpa perintah global 'voca':
+python -m voca
+python -m voca --voice
 ```
 
 Contoh perintah: *"Lihat ada file apa di sini"*, *"Buatkan script python cek
@@ -88,17 +88,17 @@ bilangan prima"*, *"Jalankan test-nya lalu laporkan hasilnya"*.
 | `WHISPER_MODEL` | `small` | ukuran STT: tiny/base/small/medium/large-v3 |
 | `QWEN_MODEL` | `qwen-plus` | model LLM |
 
-Contoh: `VOICE_PITCH=1.15 VOICE_SPEED=1.18 VOICE_VOLUME=0.82 kong`
+Contoh: `VOICE_PITCH=1.15 VOICE_SPEED=1.18 VOICE_VOLUME=0.82 voca`
 
-**Mode hands-free** (`kong --voice`): bicara langsung (rekam berhenti otomatis
+**Mode hands-free** (`voca --voice`): bicara langsung (rekam berhenti otomatis
 saat kamu diam), konfirmasi aksi dijawab "ya"/"tidak" pakai suara, ucapkan
 "berhenti"/"stop" atau Ctrl+C untuk keluar.
 
 ## Tes per-komponen
 
 ```bash
-python -m companion.voice    # tes suara keluar (TTS)
-python -m companion.listen   # tes mikrofon + transkripsi (STT)
+python -m voca.voice    # tes suara keluar (TTS)
+python -m voca.listen   # tes mikrofon + transkripsi (STT)
 ```
 
 ## Keamanan

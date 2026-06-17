@@ -1,4 +1,4 @@
-"""Entry point paket: `python -m companion [--voice]`."""
+"""Entry point paket: `python -m voca [--voice]`."""
 
 from .agent import main
 

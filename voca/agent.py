@@ -1,5 +1,5 @@
 """
-agent.py — "Otak" si AI coding companion.
+agent.py — "Otak" si Voca.
 
 Memakai model Qwen via DashScope (endpoint OpenAI-compatible).
 
@@ -23,7 +23,7 @@ from . import config
 from .tools import TOOLS_SCHEMA, TOOL_FUNCTIONS, WORKSPACE, set_confirm_handler
 from .voice import StreamSpeaker, warmup, speak
 
-SYSTEM_PROMPT = """Kamu adalah AI coding companion berbasis suara yang bekerja \
+SYSTEM_PROMPT = """Kamu adalah Voca — AI coding assistant berbasis suara yang bekerja \
 bersama developer, seperti rekan pair-programming yang aktif berkomunikasi.
 
 Gaya kerja:
@@ -159,7 +159,7 @@ def _voice_confirm(prompt: str) -> bool:
 def run_text_mode(client, messages):
     """Mode teks: ketik perintah, atau 'v' + ENTER untuk bicara sekali."""
     print("=" * 60)
-    print(f"🎙️  AI Coding Companion — model: {config.QWEN_MODEL}")
+    print(f"🎙️  Voca — model: {config.QWEN_MODEL}")
     print(f"📂 Folder kerja: {WORKSPACE}")
     print("Ketik perintah, atau 'v' + ENTER untuk bicara. 'keluar' untuk berhenti.")
     print("=" * 60)
@@ -200,7 +200,7 @@ def run_handsfree_mode(client, messages):
     set_confirm_handler(_voice_confirm)  # konfirmasi aksi lewat suara
 
     print("=" * 60)
-    print(f"🎙️  AI Coding Companion — HANDS-FREE — model: {config.QWEN_MODEL}")
+    print(f"🎙️  Voca — HANDS-FREE — model: {config.QWEN_MODEL}")
     print(f"📂 Folder kerja: {WORKSPACE}")
     print("Bicara langsung. Ucapkan 'berhenti' untuk keluar. (Ctrl+C juga bisa)")
     print("=" * 60)

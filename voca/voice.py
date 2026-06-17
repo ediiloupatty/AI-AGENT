@@ -316,6 +316,6 @@ class StreamSpeaker:
 
 
 if __name__ == "__main__":
-    # Tes cepat: python -m companion.voice
-    speak("Halo! Saya AI coding companion kamu. Sekarang suara saya berjalan "
+    # Tes cepat: python -m voca.voice
+    speak("Halo! Saya Voca, coding assistant kamu. Sekarang suara saya berjalan "
           "lokal dengan Piper, jadi jauh lebih cepat dan mengalir tanpa jeda.")

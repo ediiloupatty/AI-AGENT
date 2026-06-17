@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Pemasang AI Coding Companion (perintah: kong)
+# Pemasang Voca — AI Coding Assistant (perintah: voca)
 #
 # Cara pakai (Linux):
 #   curl -fsSL https://raw.githubusercontent.com/ediiloupatty/AI-AGENT/main/install.sh | bash
@@ -8,7 +8,7 @@
 set -euo pipefail
 
 REPO="https://github.com/ediiloupatty/AI-AGENT.git"
-INSTALL_DIR="${KONG_HOME:-$HOME/.kong}"
+INSTALL_DIR="${VOCA_HOME:-$HOME/.voca}"
 BIN_DIR="$HOME/.local/bin"
 MODEL_BASE="https://huggingface.co/rhasspy/piper-voices/resolve/main/id/id_ID/news_tts/medium"
 MODEL="id_ID-news_tts-medium"
@@ -18,7 +18,7 @@ ok()   { printf '\033[1;32m%s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m⚠️  %s\033[0m\n' "$*"; }
 die()  { printf '\033[1;31m❌ %s\033[0m\n' "$*" >&2; exit 1; }
 
-say "🎙️  Memasang AI Coding Companion (kong)..."
+say "🎙️  Memasang Voca — AI Coding Assistant..."
 
 # ─────────────────────────────────────────────────────────────
 # 1) Prasyarat wajib
@@ -96,7 +96,6 @@ if [ -z "$CURRENT_KEY" ] || [[ "$CURRENT_KEY" == sk-xxx* ]]; then
 
   # Tulis key ke .env (ganti baris DASHSCOPE_API_KEY yang sudah ada)
   if grep -q '^DASHSCOPE_API_KEY=' "$ENV_FILE"; then
-    # Ganti baris yang sudah ada (portable: tanpa -i GNU extension)
     sed "s|^DASHSCOPE_API_KEY=.*|DASHSCOPE_API_KEY=$DASHSCOPE_API_KEY|" "$ENV_FILE" > "$ENV_FILE.tmp"
     mv "$ENV_FILE.tmp" "$ENV_FILE"
   else
@@ -109,18 +108,18 @@ else
 fi
 
 # ─────────────────────────────────────────────────────────────
-# 7) Pasang perintah 'kong'
+# 7) Pasang perintah 'voca'
 # ─────────────────────────────────────────────────────────────
-say "🔗 Memasang perintah 'kong' ke $BIN_DIR..."
+say "🔗 Memasang perintah 'voca' ke $BIN_DIR..."
 mkdir -p "$BIN_DIR"
-cat > "$BIN_DIR/kong" <<EOF
+cat > "$BIN_DIR/voca" <<EOF
 #!/usr/bin/env bash
-# AI Coding Companion launcher (dibuat oleh install.sh)
+# Voca launcher (dibuat oleh install.sh)
 ROOT="$INSTALL_DIR"
 export PYTHONPATH="\$ROOT\${PYTHONPATH:+:\$PYTHONPATH}"
-exec "\$ROOT/.venv/bin/python" -m companion "\$@"
+exec "\$ROOT/.venv/bin/python" -m voca "\$@"
 EOF
-chmod +x "$BIN_DIR/kong"
+chmod +x "$BIN_DIR/voca"
 
 # ─────────────────────────────────────────────────────────────
 # 8) Auto-tambahkan PATH ke shell rc (jika belum ada)
@@ -131,7 +130,6 @@ SHELL_RC=""
 case ":$PATH:" in
   *":$BIN_DIR:"*) : ;;  # sudah ada di PATH, skip
   *)
-    # Deteksi shell yang dipakai
     if [ -f "$HOME/.zshrc" ]; then
       SHELL_RC="$HOME/.zshrc"
     elif [ -f "$HOME/.bashrc" ]; then
@@ -141,14 +139,12 @@ case ":$PATH:" in
     fi
 
     if [ -n "$SHELL_RC" ]; then
-      # Hindari duplikasi jika sudah pernah ditambahkan
       if ! grep -qF "$BIN_DIR" "$SHELL_RC"; then
         echo "" >> "$SHELL_RC"
-        echo "# AI Coding Companion (kong)" >> "$SHELL_RC"
+        echo "# Voca — AI Coding Assistant" >> "$SHELL_RC"
         echo "$PATH_EXPORT" >> "$SHELL_RC"
         ok "   ✅ PATH ditambahkan ke $SHELL_RC"
       fi
-      # Aktifkan PATH di sesi saat ini juga
       export PATH="$BIN_DIR:$PATH"
     else
       warn "Tidak ditemukan shell rc. Tambahkan manual: $PATH_EXPORT"
@@ -160,12 +156,12 @@ esac
 # 9) Pesan akhir
 # ─────────────────────────────────────────────────────────────
 echo ""
-ok "✅ Instalasi selesai! AI Coding Companion (kong) siap dipakai."
+ok "✅ Instalasi selesai! Voca siap dipakai."
 echo ""
 echo "  Jalankan sekarang:"
 echo ""
-echo "    kong              → mode teks (ketik perintah)"
-echo "    kong --voice      → mode hands-free (ngomong ↔ AI ngomong balik)"
+echo "    voca              → mode teks (ketik perintah)"
+echo "    voca --voice      → mode hands-free (ngomong ↔ Voca ngomong balik)"
 echo ""
 echo "  Setting suara & model ada di: $ENV_FILE"
 echo ""

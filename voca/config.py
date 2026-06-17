@@ -11,11 +11,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Akar proyek = satu folder di atas paket 'companion'.
+# Akar proyek = satu folder di atas paket 'voca'.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MODELS_DIR = PROJECT_ROOT / "models"
 
-# Baca .env dari akar proyek (bukan folder tempat 'kong' dipanggil) supaya
+# Baca .env dari akar proyek (bukan folder tempat 'voca' dipanggil) supaya
 # API key & setting tetap ketemu walau dijalankan dari direktori mana pun.
 load_dotenv(PROJECT_ROOT / ".env")
 

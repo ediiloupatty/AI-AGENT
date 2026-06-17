@@ -102,5 +102,5 @@ def listen_auto() -> str:
 
 
 if __name__ == "__main__":
-    # Tes cepat: python -m companion.listen  -> bicara, lihat teksnya
+    # Tes cepat: python -m voca.listen  -> bicara, lihat teksnya
     print(f"\n📝 Kamu bilang: {listen()!r}")
