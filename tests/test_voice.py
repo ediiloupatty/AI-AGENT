@@ -38,3 +38,31 @@ def test_eja_inggris_tidak_sentuh_substring():
     # 'file' di dalam 'Profile'/'filename' tak boleh diganti (harus kata utuh)
     out = voice._eja_inggris("Profile dan filename")
     assert out == "Profile dan filename"
+
+
+def _filter_kode(chunks):
+    """Jalankan StreamSpeaker._buang_kode atas potongan stream tanpa audio."""
+    sp = voice.StreamSpeaker.__new__(voice.StreamSpeaker)  # tanpa init/audio
+    sp._in_code = False
+    sp._fence_buf = ""
+    return "".join(sp._buang_kode(c) for c in chunks)
+
+
+def test_buang_kode_satu_blok():
+    teks = "Oke aku ubah.\n```css\n.btn { color: red; }\n```\nSelesai."
+    out = _filter_kode([teks])
+    assert ".btn" not in out and "color" not in out
+    assert "Oke aku ubah." in out and "Selesai." in out
+
+
+def test_buang_kode_fence_terpotong_antar_chunk():
+    # ``` kepecah jadi '`' + '``' di dua chunk
+    out = _filter_kode(["sebelum `", "``\nKODE_RAHASIA\n``", "`\nsesudah"])
+    assert "KODE_RAHASIA" not in out
+    assert "sebelum" in out and "sesudah" in out
+
+
+def test_buang_kode_inline_dibiarkan():
+    # backtick tunggal (inline) tak dianggap pagar blok -> teks tetap mengalir
+    out = _filter_kode(["pakai `npm` ya"])
+    assert "npm" in out

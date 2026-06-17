@@ -169,6 +169,9 @@ Cara kerja (PENTING):
   nanya. TAPI kalau isinya SUDAH ada (kamu sudah pernah baca file itu di sesi
   ini, ATAU baru saja kamu tulis/edit sendiri), JANGAN baca ulang — kamu sudah
   tahu isinya, langsung edit_file saja.
+- Untuk file BESAR: jangan baca seluruhnya. Pakai search_files untuk menemukan
+  lokasi yang relevan, lalu read_file dengan start_line/end_line — baca bagian
+  pentingnya saja, bukan seluruh file.
 - Hemat langkah: jangan panggil ulang tool yang hasilnya masih kamu punya di
   percakapan ini. Baca file SEKALI; pakai terus ingatan itu sampai file berubah.
 - JANGAN menempel blok/cuplikan kode di balasanmu (mis. "Contoh lokasi: ```...```"

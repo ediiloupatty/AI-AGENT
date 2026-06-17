@@ -305,6 +305,8 @@ class StreamSpeaker:
         sr = self._voice.config.sample_rate
         self._player = _open_player(sr)
         self._buf = ""
+        self._in_code = False   # sedang di dalam blok ``` ?
+        self._fence_buf = ""    # tahan backtick yang mungkin kepotong antar-chunk
         self._q: "queue.Queue[str | None]" = queue.Queue()
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
@@ -325,11 +327,47 @@ class StreamSpeaker:
         if bersih:
             self._q.put(bersih)
 
+    def _buang_kode(self, teks: str) -> str:
+        """Buang isi blok ``` dari aliran (stateful) supaya kode tak diucapkan.
+
+        Blok kode sering berisi banyak baris; pemotong kalimat memecahnya per
+        baris sehingga penyaring biasa tak melihat pasangan ``` utuh. Di sini
+        status 'dalam kode' dijaga lintas-chunk, jadi seluruh isi blok dilewati.
+        """
+        s = self._fence_buf + teks
+        self._fence_buf = ""
+        out = []
+        i, n = 0, len(s)
+        while i < n:
+            if s[i] == "`":
+                j = i
+                while j < n and s[j] == "`":
+                    j += 1
+                count = j - i
+                if j == n and count < 3:           # mungkin ``` kepotong -> tahan
+                    self._fence_buf = "`" * count
+                    break
+                if count >= 3:                      # pagar blok kode -> toggle
+                    self._in_code = not self._in_code
+                    i = j
+                    continue
+                if not self._in_code:               # 1-2 backtick: biarkan (inline)
+                    out.append("`" * count)
+                i = j
+                continue
+            if not self._in_code:
+                out.append(s[i])
+            i += 1
+        return "".join(out)
+
     def feed(self, teks: str):
         """Suapkan potongan teks dari stream; kalimat utuh langsung diucapkan."""
         if not self.enabled:
             return
-        self._buf += teks
+        prosa = self._buang_kode(teks)   # buang blok kode sebelum diucapkan
+        if not prosa:
+            return
+        self._buf += prosa
         while True:
             kalimat, self._buf = _potong_kalimat(self._buf)
             if kalimat is None:
