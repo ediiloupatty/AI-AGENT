@@ -12,6 +12,12 @@ seperti pair-programming dengan rekan yang aktif berkomunikasi.
 [![Platform](https://img.shields.io/badge/platform-Linux-informational.svg)](#kebutuhan-sistem)
 [![Version](https://img.shields.io/badge/version-1.0.0-orange.svg)](#)
 
+<br>
+
+<img src="assets/diagram.png" alt="Alur Voca: Voice In → AI Works → Voice Out" width="760">
+
+<sub><b>Voice In</b> (Whisper) → <b>AI Works</b> (Qwen + tools) → <b>Voice Out</b> (Piper)</sub>
+
 </div>
 
 ---
