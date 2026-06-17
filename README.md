@@ -15,7 +15,7 @@ Satu perintah — otomatis unduh kode, buat venv, install dependensi, unduh mode
 suara, minta API key, dan pasang perintah `voca`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ediiloupatty/AI-AGENT/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ediiloupatty/voice-coding-assistant/main/install.sh | bash
 ```
 
 Setelah itu langsung jalankan `voca`.

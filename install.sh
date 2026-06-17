@@ -3,11 +3,11 @@
 # Pemasang Voca — AI Coding Assistant (perintah: voca)
 #
 # Cara pakai (Linux):
-#   curl -fsSL https://raw.githubusercontent.com/ediiloupatty/AI-AGENT/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/ediiloupatty/voice-coding-assistant/main/install.sh | bash
 #
 set -euo pipefail
 
-REPO="https://github.com/ediiloupatty/AI-AGENT.git"
+REPO="https://github.com/ediiloupatty/voice-coding-assistant.git"
 INSTALL_DIR="${VOCA_HOME:-$HOME/.voca}"
 BIN_DIR="$HOME/.local/bin"
 MODEL_BASE="https://huggingface.co/rhasspy/piper-voices/resolve/main/id/id_ID/news_tts/medium"
