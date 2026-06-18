@@ -416,6 +416,34 @@ class StreamSpeaker:
         self._thread.join()
         self._player.close()
 
+    def stop(self):
+        """Hentikan PAKSA (untuk Ctrl+C): buang antrean & matikan audio seketika.
+
+        Beda dari close() yang menuntaskan semua suara tersisa, stop() langsung
+        membatalkan — kalimat yang belum diucapkan dibuang & pemutar ditutup.
+        """
+        if not self.enabled:
+            return
+        self.enabled = False               # cegah feed/close lanjutan tak sengaja
+        if self._use_gtts:
+            self._text = []
+            return
+        # Buang sisa kalimat di antrean supaya worker berhenti, bukan lanjut bicara.
+        try:
+            while True:
+                self._q.get_nowait()
+        except queue.Empty:
+            pass
+        self._q.put(None)                  # minta worker keluar
+        try:
+            self._player.close()           # tutup pemutar → audio berhenti segera
+        except Exception:
+            pass
+        try:
+            self._thread.join(timeout=1.0)
+        except Exception:
+            pass
+
 
 if __name__ == "__main__":
     # Tes cepat: python -m voca.voice

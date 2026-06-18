@@ -27,6 +27,27 @@ QWEN_BASE_URL = os.getenv(
 )
 QWEN_MODEL = os.getenv("QWEN_MODEL", "qwen-plus")
 QWEN_TEMPERATURE = float(os.getenv("QWEN_TEMPERATURE", "0.3"))  # rendah = lebih fokus/akurat
+
+# --- Provider LLM aktif: 'qwen' (default) atau 'openai' ---------------------
+# Qwen TIDAK diganti — OpenAI hanya opsi tambahan. Bisa di-toggle saat jalan
+# (ketik 'openai'/'gpt' atau 'qwen') atau diset default lewat VOCA_PROVIDER.
+VOCA_PROVIDER = os.getenv("VOCA_PROVIDER", "qwen")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+
+# OpenRouter (opsi; OpenAI-SDK compatible, akses banyak model lewat 1 key).
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-120b:free")
+# Aktifkan mode reasoning OpenRouter (model berpikir dulu sebelum menjawab).
+OPENROUTER_REASONING = os.getenv("OPENROUTER_REASONING", "1") != "0"
+
+# DeepSeek (opsi; OpenAI-SDK compatible, mode thinking opsional).
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+DEEPSEEK_THINKING = os.getenv("DEEPSEEK_THINKING", "1") != "0"  # mode berpikir + reasoning_effort high
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "4"))        # percobaan saat error koneksi LLM
 LLM_RETRY_BASE_DELAY = float(os.getenv("LLM_RETRY_BASE_DELAY", "2.0"))  # jeda awal retry (detik, naik eksponensial)
 
@@ -49,7 +70,7 @@ SESSION_ENABLED = os.getenv("SESSION_ENABLED", "1") != "0"     # 0 = jangan simp
 SESSION_FILE = os.getenv("SESSION_FILE", ".voca/session.json")  # relatif ke folder kerja
 
 # --- Bahasa aktif (Indonesia/English, bisa diganti saat jalan) -------------
-VOCA_LANG = os.getenv("VOCA_LANG", "id")                 # bahasa default: 'id' / 'en'
+VOCA_LANG = os.getenv("VOCA_LANG", "en")                 # bahasa default: 'en' / 'id'
 
 # --- Suara keluar: TTS Piper (lokal/offline) -------------------------------
 VOICE_ENABLED = os.getenv("VOICE_ENABLED", "1") != "0"
@@ -67,4 +88,4 @@ SPEAK_PHONETIC = os.getenv("SPEAK_PHONETIC", "1") != "0"  # eja kata Inggris umu
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")      # tiny..large-v3
 WHISPER_LANG = os.getenv("WHISPER_LANG", "id")
 SAMPLE_RATE = 16000                                      # Whisper butuh 16 kHz mono
-MIN_SPEECH_RMS = float(os.getenv("MIN_SPEECH_RMS", "0.01"))  # energi min dianggap ada ucapan (anti-halusinasi)
+MIN_SPEECH_RMS = float(os.getenv("MIN_SPEECH_RMS", "0.001"))  # energi min dianggap ada ucapan (anti-halusinasi)

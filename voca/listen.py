@@ -44,7 +44,12 @@ def _get_model() -> WhisperModel:
     global _model
     if _model is None:
         ui.info(f"  memuat model Whisper '{config.WHISPER_MODEL}' (sekali di awal)…")
-        _model = WhisperModel(config.WHISPER_MODEL, device="cpu", compute_type="int8")
+        try:
+            # Coba muat lokal secara instan tanpa cek internet ke Hugging Face
+            _model = WhisperModel(config.WHISPER_MODEL, device="cpu", compute_type="int8", local_files_only=True)
+        except Exception:
+            # Jika belum diunduh, biarkan terhubung online untuk mengunduh
+            _model = WhisperModel(config.WHISPER_MODEL, device="cpu", compute_type="int8", local_files_only=False)
     return _model
 
 
@@ -70,12 +75,15 @@ def record_until_enter() -> np.ndarray | None:
 
 
 def record_until_silence(max_seconds: float = 60.0,
-                         silence_threshold: float = 0.01,
+                         silence_threshold: float | None = None,
                          silence_duration: float = 1.2) -> np.ndarray | None:
     """Rekam otomatis: mulai saat ada suara, berhenti setelah hening sejenak.
 
     Tanpa perlu menekan ENTER — untuk mode hands-free.
     """
+    if silence_threshold is None:
+        silence_threshold = config.MIN_SPEECH_RMS
+
     chunk_dur = 0.1
     chunk_frames = int(SAMPLE_RATE * chunk_dur)
     frames = []
@@ -118,7 +126,7 @@ def _is_halusinasi(teks: str) -> bool:
 
 
 def _rekam_atau_ketik(max_seconds: float = 60.0,
-                      silence_threshold: float = 0.01,
+                      silence_threshold: float | None = None,
                       silence_duration: float = 1.2):
     """Rekam mic sampai hening, TAPI kalau user menekan ENTER -> beralih ketik.
 
@@ -127,6 +135,9 @@ def _rekam_atau_ketik(max_seconds: float = 60.0,
       ('suara', audio)   ada ucapan terekam
       ('kosong', None)   tidak ada ucapan maupun ketikan
     """
+    if silence_threshold is None:
+        silence_threshold = config.MIN_SPEECH_RMS
+
     chunk_dur = 0.1
     chunk_frames = int(SAMPLE_RATE * chunk_dur)
     frames = []

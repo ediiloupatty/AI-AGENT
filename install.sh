@@ -165,10 +165,37 @@ esac
 echo ""
 ok "✅ Instalasi selesai! Voca siap dipakai."
 echo ""
-echo "  Jalankan sekarang:"
-echo ""
-echo "    voca              → mode hands-free (default, bicara langsung)"
-echo "    voca --text       → mode teks murni (tanpa suara/STT)"
-echo ""
-echo "  Setting suara & model ada di: $ENV_FILE"
-echo ""
+
+# Cek apakah bin directory sudah ada di PATH sesi saat ini.
+# Jika belum ada, tawarkan untuk me-reload/restart shell (exec $SHELL).
+if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
+  warn "Perintah 'voca' belum aktif di sesi terminal saat ini karena PATH belum diperbarui."
+  echo "Anda perlu me-reload terminal agar perubahan PATH aktif."
+  echo ""
+  printf "\033[1;36mApakah Anda ingin me-reload terminal sekarang? [Y/n]: \033[0m"
+  # Baca dari /dev/tty agar tetap bisa membaca input keyboard walau dipasang via curl | bash
+  read -r jawaban < /dev/tty || jawaban="n"
+  if [[ -z "$jawaban" || "$jawaban" =~ ^[Yy]$ ]]; then
+    ok "Me-reload terminal..."
+    echo ""
+    exec "$SHELL"
+  else
+    echo ""
+    warn "Terminal tidak di-reload secara otomatis."
+    echo "Silakan buka terminal baru atau jalankan perintah berikut untuk mengaktifkan 'voca':"
+    if [ -n "$SHELL_RC" ]; then
+      echo "    source $SHELL_RC"
+    else
+      echo "    export PATH=\"$BIN_DIR:\$PATH\""
+    fi
+    echo ""
+  fi
+else
+  echo "  Jalankan sekarang:"
+  echo ""
+  echo "    voca              → mode hands-free (default, bicara langsung)"
+  echo "    voca --text       → mode teks murni (tanpa suara/STT)"
+  echo ""
+  echo "  Setting suara & model ada di: $ENV_FILE"
+  echo ""
+fi

@@ -62,24 +62,33 @@ Voca dirakit dari tiga "indra" yang dapat ditukar lewat konfigurasi:
 
 ---
 
-## 🚀 Instalasi Cepat (Linux)
+## 🚀 Instalasi Cepat
 
 Satu perintah — otomatis unduh kode, buat virtualenv, install dependensi, unduh
-model suara, minta API key, dan pasang perintah `voca`:
+model suara, minta API key, dan pasang perintah `voca`.
+
+**Linux / macOS** (Terminal):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ediiloupatty/voice-coding-assistant/main/install.sh | bash
 ```
 
-Setelah selesai, langsung jalankan:
+**Windows** (CMD):
+
+```bat
+curl -fsSL -o "%TEMP%\voca-install.bat" https://raw.githubusercontent.com/ediiloupatty/voice-coding-assistant/main/install.bat && "%TEMP%\voca-install.bat"
+```
+
+Setelah selesai, **buka terminal baru** lalu jalankan:
 
 ```bash
 voca
 ```
 
 > [!NOTE]
-> Windows & macOS belum didukung — pemutaran audio masih khusus Linux/ALSA.
-> Setiap pengguna memakai **API key Qwen sendiri**.
+> Di Windows/macOS audio diputar lewat **sounddevice/PortAudio** (bukan ALSA).
+> Pastikan `python`, `git`, dan `curl` sudah terpasang; `ffmpeg` opsional (untuk
+> pitch-shift suara). Setiap pengguna memakai **API key Qwen sendiri**.
 
 ---
 
@@ -99,6 +108,11 @@ sudo apt install python3 git curl ffmpeg alsa-utils portaudio19-dev
 # Fedora
 sudo dnf install python3 git curl ffmpeg alsa-utils portaudio-devel
 ```
+
+**Windows:** pasang [Python](https://python.org) (centang *Add to PATH*) dan
+[Git](https://git-scm.com). `curl` sudah ada di Windows 10+. `ffmpeg` opsional —
+unduh dari [ffmpeg.org](https://ffmpeg.org) dan tambahkan ke PATH bila ingin
+pitch-shift suara. Audio & mikrofon lewat `sounddevice` (terpasang otomatis).
 
 ---
 

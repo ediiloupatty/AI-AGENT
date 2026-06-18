@@ -6,3 +6,6 @@ __pycache__/
 models/*.onnx
 .voca/
 .pytest_cache/
+
+# Proyek React/Vite percobaan tempat Voca dipakai — bukan bagian repo ini.
+tts/

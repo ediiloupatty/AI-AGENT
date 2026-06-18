@@ -29,6 +29,7 @@ _TRANSIENT_ERRORS = (APIConnectionError, APITimeoutError,
 
 from . import config
 from . import lang
+from . import provider
 from .tools import TOOLS_SCHEMA, TOOL_FUNCTIONS, WORKSPACE, list_files, set_confirm_handler
 from .voice import StreamSpeaker, warmup, speak
 
@@ -218,11 +219,12 @@ def _stream_satu_panggilan(client, messages):
 
         try:
             stream = client.chat.completions.create(
-                model=config.QWEN_MODEL,
+                model=provider.model(),
                 messages=messages,
                 tools=TOOLS_SCHEMA,
                 temperature=config.QWEN_TEMPERATURE,
                 stream=True,
+                extra_body=provider.extra_body() or None,
             )
             for chunk in stream:
                 if not chunk.choices:
@@ -255,6 +257,16 @@ def _stream_satu_panggilan(client, messages):
             speaker.close()
             return "".join(text_parts), tool_calls
 
+        except KeyboardInterrupt:
+            # User menyela (Ctrl+C): tutup tampilan & hentikan audio segera,
+            # lalu lempar ke atas supaya giliran ini dibatalkan & balik ke prompt.
+            _tutup_live()
+            try:
+                speaker.stop()
+            except Exception:
+                pass
+            raise
+
         except _TRANSIENT_ERRORS as e:
             _tutup_live()
             try:
@@ -275,7 +287,14 @@ def hubungkan_tool(client, messages):
     """Loop satu giliran: panggil model, eksekusi tool, ulangi sampai selesai."""
     _pangkas_history(messages)
     for _ in range(config.MAX_TOOL_ITERS):
-        narasi, tool_calls = _stream_satu_panggilan(client, messages)
+        try:
+            narasi, tool_calls = _stream_satu_panggilan(client, messages)
+        except KeyboardInterrupt:
+            # Jawaban disela di tengah jalan: catat penanda asisten supaya urutan
+            # history tetap valid (user → assistant), lalu teruskan ke pemanggil.
+            messages.append({"role": "assistant",
+                             "content": "(jawaban dihentikan oleh pengguna)"})
+            raise
 
         # Susun pesan balasan asisten (teks + permintaan tool, jika ada).
         assistant_msg = {"role": "assistant", "content": narasi}
@@ -348,6 +367,76 @@ def _set_bahasa(code: str, messages) -> None:
     speak(pesan)
 
 
+def _build_client() -> OpenAI:
+    """Buat client OpenAI-SDK untuk provider aktif (Qwen/OpenAI/OpenRouter)."""
+    return OpenAI(
+        api_key=provider.api_key(),
+        base_url=provider.base_url(),
+        default_headers=provider.headers() or None,
+    )
+
+
+def _cek_ganti_provider(perintah: str) -> bool:
+    """Tangani perintah ganti provider (qwen/openai). Return True kalau perintah
+    memang soal provider (caller skip giliran & bangun ulang client)."""
+    code = provider.detect_command(perintah)
+    if not code:
+        return False
+    if code == provider.code():
+        console.print(f"[muted]Sudah pakai {provider.name()}.[/muted]")
+    elif not provider.has_key(code):
+        ui.error(f"API key untuk {provider.name_of(code)} belum diset di .env.")
+    else:
+        provider.set(code)
+        pesan = f"Sekarang pakai {provider.name()} ({provider.model()})."
+        console.print(f"\n[accent.hi]{ui.SIGIL}[/] {pesan}")
+        speak(pesan)
+    return True
+
+
+def _tampilkan_menu_model(client) -> OpenAI:
+    """Menampilkan menu pilihan model interaktif. Menghasilkan client baru jika berubah."""
+    opsi_menu = []
+    indeks_aktif = 0
+    for i, (k, v) in enumerate(provider._PROVIDERS.items()):
+        is_curr = k == provider.code()
+        if is_curr:
+            indeks_aktif = i
+        opsi_menu.append({
+            "code": k,
+            "name": v["name"],
+            "model": v["model"],
+            "configured": provider.has_key(k),
+            "is_current": is_curr
+        })
+    pilihan = ui.pilih_model(opsi_menu, indeks_aktif)
+    if pilihan is not None:
+        pilih_code = opsi_menu[pilihan]["code"]
+        if pilih_code != provider.code():
+            if not provider.has_key(pilih_code):
+                ui.error(f"API key untuk {provider.name_of(pilih_code)} belum diset di .env.")
+            else:
+                provider.set(pilih_code)
+                client = _build_client()
+                pesan = f"Sekarang pakai {provider.name()} ({provider.model()})."
+                console.print(f"\n[accent.hi]{ui.SIGIL}[/] {pesan}")
+                speak(pesan)
+    return client
+
+
+def _tampilkan_menu_bahasa(messages) -> None:
+    """Menu pilih bahasa interaktif (↑/↓). Terapkan bila user memilih yang baru."""
+    opsi = lang.daftar()
+    indeks_aktif = next((i for i, o in enumerate(opsi) if o["is_current"]), 0)
+    pilihan = ui.pilih_bahasa(opsi, indeks_aktif)
+    if pilihan is not None:
+        kode = opsi[pilihan]["code"]
+        if kode != lang.code():
+            _set_bahasa(kode, messages)   # ganti directive LLM + konfirmasi (teks & suara)
+        else:
+            console.print(f"[muted]Sudah pakai {lang.name()}.[/muted]")
+
+
 def _cek_ganti_bahasa(perintah: str, messages) -> bool:
     """Tangani perintah ganti bahasa. Return True kalau perintah memang soal bahasa
     (caller harus skip giliran, tidak mengirim ke LLM)."""
@@ -371,12 +460,28 @@ def _minta_keluar(perintah: str) -> bool:
     return len(kata) <= 3 and bool(set(kata) & _KATA_STOP)
 
 
+def _prompt_suara(prompt: str) -> str:
+    """Versi prompt yang enak DIUCAPKAN (bukan yang di layar):
+    - path dalam kutip -> hanya nama file tanpa ekstensi ('…/src/Register.jsx' -> 'Register').
+    - '(+X/-Y baris)' -> 'tambah X baris, hapus Y baris' (jangan dibaca simbol).
+    """
+    def _basename(m):
+        nama = m.group(1).rstrip("/").split("/")[-1]      # ambil nama file
+        return nama.rsplit(".", 1)[0] if "." in nama else nama  # buang ekstensi
+
+    s = re.sub(r"'([^']*/[^']*)'", _basename, prompt)      # path ber-slash dalam kutip
+    s = re.sub(r"'([^']*\.[^']*)'", _basename, s)          # nama file ber-titik tanpa slash
+    s = re.sub(r"\s*\(\+(\d+)\s*/\s*-(\d+)\s*baris\)",     # (+X/-Y baris) -> kata-kata
+               r", tambah \1 baris, hapus \2 baris", s)
+    return s
+
+
 def _voice_confirm(prompt: str) -> bool:
     """Konfirmasi via suara: AI bertanya, user menjawab 'ya'/'tidak'."""
     from .listen import listen_auto
 
-    ui.tanya_konfirmasi_suara(prompt)
-    speak(prompt + " Jawab ya atau tidak.")
+    ui.tanya_konfirmasi_suara(prompt)                      # di layar: prompt lengkap (path penuh)
+    speak(_prompt_suara(prompt) + " Jawab ya atau tidak.")  # diucapkan: versi ringkas
     jawab = listen_auto().lower()
     ui.info(f"(suara) jawaban: {jawab!r}")
     
@@ -386,7 +491,10 @@ def _voice_confirm(prompt: str) -> bool:
     else:
         setuju = bool(kata_jawaban & _KATA_YA)
         
-    speak("Oke, saya lanjutkan." if setuju else "Baik, saya batalkan.")
+    if lang.code() == "en":
+        speak("Okay, proceeding." if setuju else "Alright, cancelled.")
+    else:
+        speak("Oke, saya lanjutkan." if setuju else "Baik, saya batalkan.")
     return setuju
 
 
@@ -395,13 +503,13 @@ def _voice_confirm(prompt: str) -> bool:
 # ---------------------------------------------------------------------------
 def run_text_mode(client, messages):
     """Mode teks: ketik perintah, atau 'v' + ENTER untuk bicara sekali."""
-    ui.banner(config.QWEN_MODEL, WORKSPACE, "teks")
+    ui.banner(provider.model(), WORKSPACE, "teks", lang.name())
+    # Petunjuk perintah cukup sekali di sini (bukan di atas tiap kotak input).
+    ui.hint(f"'v' bicara  {ui.DOT}  /model  {ui.DOT}  /lan  {ui.DOT}  'keluar' berhenti")
 
     while True:
         try:
-            perintah = ui.kotak_input(
-                f"'v' + Enter untuk bicara  {ui.DOT}  'english'/'indonesia' ganti bahasa"
-                f"  {ui.DOT}  'keluar' berhenti")
+            perintah = ui.kotak_input()
         except (EOFError, KeyboardInterrupt):
             ui.selesai()
             break
@@ -418,8 +526,18 @@ def run_text_mode(client, messages):
 
         if not perintah:
             continue
+        if perintah.strip().lower() == "/model":
+            client = _tampilkan_menu_model(client)
+            continue
+        if perintah.strip().lower() in ("/lan", "/lang"):
+            _tampilkan_menu_bahasa(messages)
+            _simpan_sesi(messages)
+            continue
         if _cek_ganti_bahasa(perintah, messages):
             _simpan_sesi(messages)
+            continue
+        if _cek_ganti_provider(perintah):
+            client = _build_client()
             continue
         if perintah.lower() in ("keluar", "exit", "quit"):
             ui.selesai()
@@ -428,6 +546,8 @@ def run_text_mode(client, messages):
         messages.append({"role": "user", "content": perintah})
         try:
             hubungkan_tool(client, messages)
+        except KeyboardInterrupt:
+            console.print("\n[muted]  ⏹ dihentikan — kembali ke prompt[/]")
         except Exception as e:
             ui.error(e)
         _simpan_sesi(messages)
@@ -439,10 +559,12 @@ def run_handsfree_mode(client, messages):
 
     set_confirm_handler(_voice_confirm)  # konfirmasi aksi lewat suara
 
-    ui.banner(config.QWEN_MODEL, WORKSPACE, "hands-free (suara)")
-    ui.hint(f"ngomong / ketik perintah  {ui.DOT}  'english'/'indonesia' ganti bahasa"
-            f"  {ui.DOT}  'berhenti' keluar")
-    speak("Halo, saya siap membantu. Silakan bicara, atau ketik kalau mau.")
+    # Banner saja; petunjuk perintah ada di status bar bawah (selalu tampil),
+    # jadi tak perlu hint terpisah di atas (hindari info double).
+    ui.banner(provider.model(), WORKSPACE, "hands-free (suara)", lang.name())
+    speak("Hi, I'm ready to help. Talk to me, or type if you prefer."
+          if lang.code() == "en" else
+          "Halo, saya siap membantu. Silakan bicara, atau ketik kalau mau.")
 
     H = max(15, shutil.get_terminal_size().lines)
     W = shutil.get_terminal_size().columns
@@ -461,7 +583,7 @@ def run_handsfree_mode(client, messages):
             print(f"\033[1;{H-3}r", end="", flush=True)
 
             # Gambar bar status di bagian paling bawah
-            ui.status_bar(H, W, "dengerin")
+            ui.status_bar(H, W, "dengerin", lang.code().upper())
 
             try:
                 jenis, data = _rekam_atau_ketik()
@@ -476,7 +598,7 @@ def run_handsfree_mode(client, messages):
             elif jenis == "suara":
                 if data is None:
                     continue
-                ui.status_bar(H, W, "transkripsi")
+                ui.status_bar(H, W, "transkripsi", lang.code().upper())
                 perintah = transcribe(data)
             else:
                 continue
@@ -487,23 +609,36 @@ def run_handsfree_mode(client, messages):
             # Cetak perintah user di scroll region (echo)
             ui.pesan_user(perintah)
 
-            # Ganti bahasa? tangani langsung tanpa lewat LLM.
-            if _cek_ganti_bahasa(perintah, messages):
+            if perintah.strip().lower() == "/model":
+                client = _tampilkan_menu_model(client)
+                continue
+            if perintah.strip().lower() in ("/lan", "/lang"):
+                _tampilkan_menu_bahasa(messages)
                 _simpan_sesi(messages)
                 continue
 
+            # Ganti bahasa / provider? tangani langsung tanpa lewat LLM.
+            if _cek_ganti_bahasa(perintah, messages):
+                _simpan_sesi(messages)
+                continue
+            if _cek_ganti_provider(perintah):
+                client = _build_client()
+                continue
+
             if _minta_keluar(perintah):
-                speak("Baik, sampai jumpa!")
+                speak("Alright, see you!" if lang.code() == "en" else "Baik, sampai jumpa!")
                 ui.selesai()
                 break
 
-            ui.status_bar(H, W, "berpikir")
+            ui.status_bar(H, W, "berpikir", lang.code().upper())
             # Kembalikan kursor ke scroll region
             print(f"\033[{H-3};1H", end="", flush=True)
 
             messages.append({"role": "user", "content": perintah})
             try:
                 hubungkan_tool(client, messages)
+            except KeyboardInterrupt:
+                console.print("\n[muted]  ⏹ dihentikan — kembali mendengarkan[/]")
             except Exception as e:
                 ui.error(e)
             _simpan_sesi(messages)
@@ -514,11 +649,12 @@ def run_handsfree_mode(client, messages):
 
 
 def main():
-    if not config.QWEN_API_KEY:
-        ui.error("DASHSCOPE_API_KEY belum diset. Salin .env.example ke .env, lalu isi key-mu.")
+    if not provider.has_key(provider.code()):
+        ui.error(f"API key untuk {provider.name()} belum diset. "
+                 f"Salin .env.example ke .env, lalu isi key-mu.")
         sys.exit(1)
 
-    client = OpenAI(api_key=config.QWEN_API_KEY, base_url=config.QWEN_BASE_URL)
+    client = _build_client()
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT + "\n\n" + lang.directive()},
         {"role": "system",
