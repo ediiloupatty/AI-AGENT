@@ -3,11 +3,10 @@
 //! Suara ditangani oleh sidecar Python (voca.voice_server) demi kemulusan;
 //! core (chat + tool) tetap Rust murni → startup instan + 1 binary.
 //!
-//! Mode (default: SUARA penuh / hands-free — dengar mic + ucapkan jawaban):
-//!   voca            mode suara penuh (listen + speak)
-//!   --text / -t     mode teks murni (ketik, tanpa suara)
-//!   --voice / -v    ketik input, jawaban diucapkan (speak saja)
-//!   --listen / -l   sama dengan default (listen + speak)
+//! Mode (default: KETIK, ala Claude/Codex CLI — semua diketik di bar bawah):
+//!   voca            mode ketik (default): ketik pesan & perintah (/model, /lan)
+//!   --voice / -v    ketik input, jawaban diucapkan (TTS)
+//!   --listen / -l   input lewat mic (STT) + jawaban diucapkan (hands-free)
 //!   --say "teks"    ucapkan teks lalu keluar (uji sidecar suara)
 //!   --version / -V  cetak versi
 
@@ -55,14 +54,15 @@ async fn main() -> Result<()> {
     let key = config::ensure_api_key(prov.code, prov.name)?;
     prov.api_key = Some(key);
 
-    // Tentukan mode. Default = SUARA penuh (hands-free). --text mematikannya.
+    // Default = KETIK (ala Claude/Codex CLI): semua diketik di bar bawah.
+    // Suara opsional: --voice (jawaban diucapkan), --listen (input mic).
     let has = |names: &[&str]| args.iter().any(|a| names.contains(&a.as_str()));
-    let (listen, speak) = if has(&["--text", "-t"]) {
-        (false, false) // teks murni
+    let (listen, speak) = if has(&["--listen", "-l"]) {
+        (true, true) // hands-free: dengar mic + ucapkan jawaban
     } else if has(&["--voice", "-v"]) {
         (false, true) // ketik, jawaban diucapkan
     } else {
-        (true, true) // default & --listen: dengar mic + ucapkan
+        (false, false) // DEFAULT: ketik penuh
     };
 
     let mode = if listen {
@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
     } else if speak {
         "ketik + suara"
     } else {
-        "teks"
+        "ketik"
     };
 
     // Masuk mode TUI (bar input ter-pin di dasar). Guard memulihkan terminal

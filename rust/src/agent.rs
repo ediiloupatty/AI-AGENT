@@ -169,15 +169,10 @@ fn detect_quick_command(teks: &str) -> Option<(&'static str, &'static str)> {
         return None;
     }
     match t {
-        // Tampilkan daftar model (arg kosong → switch_model menampilkan list).
-        "model" | "ganti model" | "pilih model" | "list model" | "models" => {
-            Some(("model", ""))
-        }
         "qwen" | "kuen" | "kwen" => Some(("model", "qwen")),
         "openai" | "open ai" | "gpt" | "chatgpt" => Some(("model", "openai")),
         "openrouter" | "open router" | "router" => Some(("model", "openrouter")),
         "deepseek" | "deep seek" | "dipsik" => Some(("model", "deepseek")),
-        "bahasa" | "ganti bahasa" | "language" => Some(("lan", "")), // toggle id/en
         "english" | "bahasa inggris" | "inggris" => Some(("lan", "en")),
         "indonesia" | "bahasa indonesia" => Some(("lan", "id")),
         _ => None,
