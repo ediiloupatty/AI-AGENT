@@ -18,6 +18,7 @@ serde_json = "1"
 dotenvy = "0.15"
 dirs = "5"
 terminal_size = "0.3"
+crossterm = "0.28"   # raw-mode + baca tombol panah utk menu pilih model
 anyhow = "1"
 
 # Suara ditangani oleh sidecar Python (voca.voice_server) — lihat voicebridge.rs.

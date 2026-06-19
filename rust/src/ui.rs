@@ -5,6 +5,9 @@
 
 use std::io::{self, Write};
 
+use crossterm::event::{read, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+
 // --- Palet ANSI (sama persis dgn voca/ui.py) ------------------------------
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
@@ -166,6 +169,63 @@ pub fn draw_bar(w: usize, h: usize, label: &str, hint: &str, lang: &str) {
     print!("\x1b[{h};{col}H{MUTED}{badge}{RESET}");
     print!("\x1b8"); // pulihkan kursor
     io::stdout().flush().ok();
+}
+
+// ===========================================================================
+// Menu pilih (panah ↑/↓ + Enter) — meniru pilih_model voca/ui.py.
+// ===========================================================================
+
+fn render_menu(title: &str, items: &[String], idx: usize) {
+    print!("\r\x1b[2K{ACCENT}┌─ {ACCENT_HI}{BOLD}{title}{RESET}");
+    for (i, it) in items.iter().enumerate() {
+        if i == idx {
+            print!("\x1b[1E\x1b[2K {ACCENT_HI}{BOLD}❯ {it}{RESET}");
+        } else {
+            print!("\x1b[1E\x1b[2K   {MUTED}{it}{RESET}");
+        }
+    }
+    print!("\x1b[1E\x1b[2K {MUTED}↑/↓ pilih · Enter ok · q batal{RESET}");
+    io::stdout().flush().ok();
+}
+
+/// Menu panah. Return indeks terpilih, atau None bila batal (q/Esc).
+pub fn select_menu(title: &str, items: &[String], current: usize) -> Option<usize> {
+    let n = items.len();
+    if n == 0 {
+        return None;
+    }
+    let mut idx = current.min(n - 1);
+    println!(); // ruang sebelum menu
+    render_menu(title, items, idx);
+    let up = n + 1; // dari baris hint kembali ke baris judul
+
+    let _ = enable_raw_mode();
+    let chosen = loop {
+        match read() {
+            Ok(Event::Key(k)) if k.kind != KeyEventKind::Release => match k.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    idx = (idx + n - 1) % n;
+                    print!("\x1b[{up}F");
+                    render_menu(title, items, idx);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    idx = (idx + 1) % n;
+                    print!("\x1b[{up}F");
+                    render_menu(title, items, idx);
+                }
+                KeyCode::Enter => break Some(idx),
+                KeyCode::Esc | KeyCode::Char('q') => break None,
+                KeyCode::Char('c') if k.modifiers.contains(KeyModifiers::CONTROL) => break None,
+                _ => {}
+            },
+            Ok(_) => {}
+            Err(_) => break None,
+        }
+    };
+    let _ = disable_raw_mode();
+    print!("\x1b[1E"); // turun ke baris bersih di bawah menu
+    io::stdout().flush().ok();
+    chosen
 }
 
 /// Taruh kursor di kotak input (terlihat "terkunci" di bar) — saat menunggu.

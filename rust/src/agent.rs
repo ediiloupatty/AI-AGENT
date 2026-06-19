@@ -131,19 +131,31 @@ pub async fn run(
     Ok(())
 }
 
-/// `/model [kode]` — tampilkan daftar provider, atau pindah ke salah satunya.
+/// `/model [kode]` — tanpa argumen: menu panah ↑/↓; dgn argumen: pindah langsung.
 fn switch_model(arg: &str, provider: &mut Provider) {
     if arg.is_empty() {
-        ui::info("provider tersedia:");
-        for p in provider::all() {
-            let aktif = if p.code == provider.code { "  (aktif)" } else { "" };
-            let key = if p.api_key.is_some() { "●" } else { "○" };
-            ui::info(&format!("  {key} {:<11} {}{aktif}", p.code, p.model));
+        let all = provider::all();
+        let items: Vec<String> = all
+            .iter()
+            .map(|p| {
+                let key = if p.api_key.is_some() { "●" } else { "○" };
+                let aktif = if p.code == provider.code { " (aktif)" } else { "" };
+                format!("{:<11} {}  {key}{aktif}", p.code, p.model)
+            })
+            .collect();
+        let cur = all.iter().position(|p| p.code == provider.code).unwrap_or(0);
+        match ui::select_menu("PILIH MODEL", &items, cur) {
+            Some(idx) => apply_provider(all[idx].code, provider),
+            None => ui::info("(batal)"),
         }
-        ui::info("pakai: /model <qwen|openai|openrouter|deepseek>");
         return;
     }
-    match provider::by_code(arg) {
+    apply_provider(arg, provider);
+}
+
+/// Pindah provider berdasarkan kode (minta API key bila perlu).
+fn apply_provider(code: &str, provider: &mut Provider) {
+    match provider::by_code(code) {
         Some(mut p) => match config::ensure_api_key(p.code, p.name) {
             Ok(k) => {
                 p.api_key = Some(k);
