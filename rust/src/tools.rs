@@ -1,17 +1,13 @@
 //! tools.rs — "tangan" agent (port dari voca/tools.py).
 //!
-//! Semua aksi dibatasi di dalam folder kerja (WORKSPACE = cwd). Aksi yang
-//! mengubah sistem (write_file, edit_file, run_command) MINTA KONFIRMASI dulu.
+//! Semua aksi dibatasi di dalam folder kerja (WORKSPACE = cwd).
 
 use std::env;
 use std::fs;
-use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
 use serde_json::{json, Value};
-
-use crate::ui;
 
 const IGNORE_DIRS: &[&str] = &[
     ".git", "__pycache__", "node_modules", ".venv", "venv", ".voca",
@@ -50,17 +46,6 @@ fn resolve_safe(path: &str) -> Result<PathBuf, String> {
     } else {
         Err(format!("Akses ditolak: '{path}' di luar folder kerja."))
     }
-}
-
-/// Konfirmasi y/N lewat stdin (default: tidak).
-fn confirm(prompt: &str) -> bool {
-    print!("  {prompt} [y/N] ");
-    std::io::stdout().flush().ok();
-    let mut s = String::new();
-    if std::io::stdin().read_line(&mut s).is_err() {
-        return false;
-    }
-    matches!(s.trim().to_lowercase().as_str(), "y" | "yes" | "ya")
 }
 
 // ---------------------------------------------------------------------------
@@ -175,9 +160,6 @@ fn write_file(path: &str, content: &str) -> String {
     };
     let ada = target.exists();
     let aksi = if ada { "menimpa" } else { "membuat" };
-    if !confirm(&format!("Agent ingin {aksi} file '{path}'. Lanjut?")) {
-        return format!("Dibatalkan oleh user. File '{path}' tidak diubah.");
-    }
     if let Some(parent) = target.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -214,9 +196,6 @@ fn edit_file(path: &str, old_string: &str, new_string: &str) -> String {
         return "Tidak ada perubahan (old_string sama dengan new_string).".to_string();
     }
     let baru = lama.replacen(old_string, new_string, 1);
-    if !confirm(&format!("Agent ingin mengedit '{path}'. Lanjut?")) {
-        return format!("Dibatalkan oleh user. File '{path}' tidak diubah.");
-    }
     match fs::write(&target, baru) {
         Ok(_) => format!("Berhasil mengedit '{path}'."),
         Err(e) => format!("Gagal menulis '{path}': {e}"),
@@ -224,10 +203,6 @@ fn edit_file(path: &str, old_string: &str, new_string: &str) -> String {
 }
 
 fn run_command(command: &str) -> String {
-    if !confirm(&format!("Agent ingin menjalankan: `{command}`. Lanjut?")) {
-        return "Dibatalkan oleh user. Command tidak dijalankan.".to_string();
-    }
-    ui::info(&format!("$ {command}"));
     let ws = workspace();
     let output = if cfg!(target_os = "windows") {
         Command::new("cmd").args(["/C", command]).current_dir(&ws).output()

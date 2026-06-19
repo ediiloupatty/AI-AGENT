@@ -12,10 +12,12 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-/// Batas perilaku agent (port dari config.py).
+/// Batas perilaku agent.
+#[derive(Clone)]
 pub struct Limits {
     pub max_history: usize,
-    pub max_tool_iters: usize,
+    #[allow(dead_code)]
+    pub max_tool_iters: usize, // reserved: batas iterasi tool chaining
     pub llm_max_retries: u32,
     pub llm_retry_base_delay: f64,
     pub temperature: f32,

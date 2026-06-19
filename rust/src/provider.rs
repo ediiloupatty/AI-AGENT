@@ -56,7 +56,8 @@ pub fn all() -> Vec<Provider> {
     ]
 }
 
-/// Kode provider default (VOCA_PROVIDER), jatuh ke "qwen" kalau tak dikenal.
+/// Kode provider default dari env `VOCA_PROVIDER`, fallback ke "qwen".
+#[allow(dead_code)]
 pub fn default_code() -> String {
     let want = env_or("VOCA_PROVIDER", "qwen");
     let known = ["qwen", "openai", "openrouter", "deepseek"];

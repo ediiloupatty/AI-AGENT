@@ -1,176 +1,339 @@
-//! agent.rs — loop percakapan teks (Fase 0: belum ada tool & suara).
-//!
-//! Menjaga riwayat, memanggil LLM streaming, dan memangkas history agar tak
-//! membengkak (port sederhana dari _pangkas_history di voca/agent.py).
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use tui_input::backend::crossterm::EventHandler;
 
-use anyhow::Result;
+use crate::app::{App, AppEvent, InputMode, MenuKind, MenuState};
+use crate::llm::{Message, ToolCall};
+use crate::{llm, provider, tools};
 
-use crate::config::{self, Limits};
-use crate::llm::{self, Message};
-use crate::provider::{self, Provider};
-use crate::voicebridge::VoiceBridge;
-use crate::{tools, ui};
+// ── Entry point ──────────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT: &str =
-    "Kamu Voca, asisten coding yang ringkas dan membantu. Kamu punya tool untuk \
-     melihat folder, mencari, membaca, menulis/mengedit file, dan menjalankan \
-     perintah. Pakai tool seperlunya, lalu jawab dalam bahasa pengguna.";
+pub fn handle_event(app: &mut App, event: AppEvent) {
+    match event {
+        AppEvent::Key(key)         => handle_key(app, key),
+        AppEvent::Mouse(mouse)     => handle_mouse(app, mouse),
+        AppEvent::Resize(_, _)     => {}
 
-/// Pangkas history agar jumlah pesan (di luar system) tak melebihi max_history.
-/// Dimulai dari pesan 'user' supaya pasangan user/assistant tetap utuh.
-fn trim_history(messages: &mut Vec<Message>, max_history: usize) {
-    // messages[0] selalu system.
-    while messages.len() - 1 > max_history {
-        // Buang pesan tertua setelah system.
+        AppEvent::Tick => {
+            app.spinner_frame = app.spinner_frame.wrapping_add(1);
+        }
+
+        // ── LLM streaming ────────────────────────────────────────────────────
+        AppEvent::LlmChunk(chunk) => {
+            app.append_chunk(&chunk);
+            if app.is_at_bottom { app.scroll_to_bottom(0); }
+        }
+        AppEvent::LlmComplete(text, tool_calls) => {
+            handle_llm_complete(app, text, tool_calls);
+        }
+        AppEvent::LlmError(msg) => {
+            app.finish_streaming();
+            app.push_system(&format!("❌ {msg}"));
+        }
+
+        // ── Voice ────────────────────────────────────────────────────────────
+        AppEvent::StartListening => {
+            // Dipanggil setelah draw() menampilkan "mendengarkan..." di layar.
+            // block_in_place: beri tahu Tokio bahwa kita akan blocking I/O
+            // agar thread lain bisa dijadwalkan selama menunggu suara.
+            if let Some(bridge) = app.bridge.as_mut() {
+                let lang = app.voice.lang.clone();
+                let tx   = app.tx.clone();
+                let text = tokio::task::block_in_place(|| bridge.listen(&lang));
+                let _ = tx.send(AppEvent::VoiceResult(text));
+            } else {
+                app.input_mode = InputMode::Normal;
+            }
+        }
+        AppEvent::VoiceResult(text) => {
+            app.input_mode = InputMode::Normal;
+            app.voice_text_mode = false;
+            if !text.is_empty() {
+                process_user_input(app, &text);
+            } else {
+                app.push_system("🎤 tidak ada ucapan terdeteksi — coba lagi atau ketik pesan");
+            }
+        }
+        AppEvent::VoiceSpeak(text) => {
+            // Dipanggil SETELAH draw() — teks jawaban sudah tampil di layar
+            // sebelum TTS mulai berbicara.
+            if let Some(bridge) = app.bridge.as_mut() {
+                let lang = app.voice.lang.clone();
+                tokio::task::block_in_place(|| bridge.speak(&text, &lang));
+            }
+        }
+
+        // ── Tools ─────────────────────────────────────────────────────────────
+        AppEvent::ToolResult(id, result) => {
+            app.llm_messages.push(Message::tool_result(&id, result));
+            start_llm_turn(app);
+        }
+        AppEvent::ConfirmAnswer(yes) => {
+            app.input_mode = InputMode::Normal;
+            if !yes { app.push_system("(dibatalkan)"); }
+        }
+    }
+}
+
+// ── Keyboard ─────────────────────────────────────────────────────────────────
+
+fn handle_key(app: &mut App, key: KeyEvent) {
+    // Global: Ctrl-C keluar
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        app.should_quit = true;
+        return;
+    }
+    // Global: scroll
+    match key.code {
+        KeyCode::PageUp   => { app.scroll_up(10); return; }
+        KeyCode::PageDown => { app.scroll_down(10, 0); return; }
+        KeyCode::End      => { app.scroll_to_bottom(0); return; }
+        _ => {}
+    }
+
+    match &app.input_mode.clone() {
+        InputMode::Normal => {
+            let in_mic_mode = app.voice.listen
+                && !app.voice_text_mode
+                && app.input.value().is_empty()
+                && app.bridge.is_some();
+
+            match key.code {
+                KeyCode::Enter => {
+                    let text = app.input.value().to_string();
+                    app.input.reset();
+                    if !text.is_empty() {
+                        app.voice_text_mode = false;
+                        process_user_input(app, &text);
+                    } else if in_mic_mode {
+                        app.input_mode = InputMode::Listening;
+                        let _ = app.tx.send(AppEvent::StartListening);
+                    }
+                }
+
+                // 't' di mic-mode: beralih ke text input tanpa menambah 't' ke buffer
+                KeyCode::Char('t') | KeyCode::Char('T') if in_mic_mode => {
+                    app.voice_text_mode = true;
+                }
+
+                // Esc di voice text-mode: kembali ke mic indicator
+                KeyCode::Esc if app.voice_text_mode => {
+                    app.voice_text_mode = false;
+                    app.input.reset();
+                }
+
+                _ => {
+                    if in_mic_mode {
+                        app.voice_text_mode = true;
+                    }
+                    app.input.handle_event(&crossterm::event::Event::Key(key));
+                }
+            }
+        }
+
+        InputMode::Menu => {
+            if let Some(mut menu) = app.menu.take() {
+                let n = menu.items.len();
+                match key.code {
+                    KeyCode::Up   | KeyCode::Char('k') => {
+                        menu.selected = (menu.selected + n - 1) % n;
+                        app.menu = Some(menu);
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        menu.selected = (menu.selected + 1) % n;
+                        app.menu = Some(menu);
+                    }
+                    KeyCode::Enter => {
+                        app.input_mode = InputMode::Normal;
+                        match menu.kind {
+                            MenuKind::Model => {
+                                let all = provider::all();
+                                apply_provider(all[menu.selected].code, app);
+                            }
+                            MenuKind::Language => {
+                                let langs = ["id", "en"];
+                                apply_language(langs[menu.selected], app);
+                            }
+                        }
+                    }
+                    KeyCode::Esc | KeyCode::Char('q') => {
+                        app.input_mode = InputMode::Normal;
+                        app.push_system("(dibatalkan)");
+                    }
+                    _ => { app.menu = Some(menu); }
+                }
+            }
+        }
+
+        InputMode::Confirming(_) => match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let _ = app.tx.send(AppEvent::ConfirmAnswer(true));
+            }
+            KeyCode::Enter | KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                let _ = app.tx.send(AppEvent::ConfirmAnswer(false));
+            }
+            _ => {}
+        },
+
+        InputMode::Processing | InputMode::Listening => {
+            // Abaikan input saat sedang proses / mendengarkan
+        }
+    }
+}
+
+fn handle_mouse(app: &mut App, mouse: crossterm::event::MouseEvent) {
+    use crossterm::event::MouseEventKind;
+    match mouse.kind {
+        MouseEventKind::ScrollUp   => app.scroll_up(3),
+        MouseEventKind::ScrollDown => app.scroll_down(3, 0),
+        _ => {}
+    }
+}
+
+// ── User input → LLM ─────────────────────────────────────────────────────────
+
+fn process_user_input(app: &mut App, teks: &str) {
+    let teks = teks.trim();
+    if teks.is_empty() { return; }
+
+    // Slash commands
+    match teks {
+        "/exit" | "/quit" => { app.should_quit = true; return; }
+        "/help" => {
+            app.push_system("Perintah: /model [nama]  ·  /lan [id|en]  ·  /exit");
+            return;
+        }
+        _ => {}
+    }
+    if let Some(arg) = teks.strip_prefix("/model") {
+        switch_model(app, arg.trim());
+        return;
+    }
+    if let Some(arg) = teks.strip_prefix("/lan") {
+        switch_lang(app, arg.trim_start_matches('g').trim());
+        return;
+    }
+
+    // Quick shortcuts (ganti model/bahasa dengan kata natural)
+    if let Some((kind, val)) = detect_quick_command(teks) {
+        match kind {
+            "model" => { switch_model(app, val); return; }
+            _       => { switch_lang(app, val); return; }
+        }
+    }
+
+    // Pesan biasa → kirim ke LLM
+    app.push_user(teks);
+    app.llm_messages.push(Message::new("user", teks));
+    start_llm_turn(app);
+}
+
+fn start_llm_turn(app: &mut App) {
+    app.start_streaming("memikirkan...");
+    let tx     = app.tx.clone();
+    let client = app.client.clone();
+    let prov   = app.provider.clone();
+    let limits = app.limits.clone();
+    let msgs   = app.llm_messages.clone();
+    let tools  = app.tools_schema.clone();
+
+    tokio::spawn(async move {
+        llm::stream_to_channel(client, prov, limits, msgs, tools, tx).await;
+    });
+}
+
+fn handle_llm_complete(app: &mut App, narasi: String, tool_calls: Vec<ToolCall>) {
+    // finish_streaming() push bubble VOCA → draw() menampilkannya
+    app.finish_streaming();
+    app.llm_messages.push(Message::assistant(narasi.clone(), tool_calls.clone()));
+
+    // Jadwalkan TTS setelah draw() berikutnya:
+    // urutan event → LlmComplete (finish_streaming+push) → draw() tampilkan teks
+    // → VoiceSpeak → bridge.speak() blok selama TTS
+    if app.voice.speak && app.bridge.is_some() && !narasi.is_empty() {
+        let _ = app.tx.send(AppEvent::VoiceSpeak(narasi.clone()));
+    }
+
+    if tool_calls.is_empty() {
+        trim_history(&mut app.llm_messages, app.limits.max_history);
+        return;
+    }
+
+    // Eksekusi semua tool, kumpulkan hasil, lalu lanjut iterasi LLM
+    for tc in &tool_calls {
+        let summary = tools::summarize_args(&tc.function.arguments);
+        app.push_tool(&format!("◆ {} {}", tc.function.name, summary));
+        let result = tools::dispatch(&tc.function.name, &tc.function.arguments);
+        app.llm_messages.push(Message::tool_result(&tc.id, result));
+    }
+    start_llm_turn(app);
+}
+
+// ── Slash command helpers ─────────────────────────────────────────────────────
+
+fn switch_model(app: &mut App, arg: &str) {
+    if arg.is_empty() {
+        let all = provider::all();
+        let cur = all.iter().position(|p| p.code == app.provider.code).unwrap_or(0);
+        let items = all.iter().map(|p| {
+            let dot  = if p.api_key.is_some() { "●" } else { "○" };
+            let flag = if p.code == app.provider.code { " ←" } else { "" };
+            format!("{:<11} {}  {dot}{flag}", p.code, p.model)
+        }).collect();
+        app.menu = Some(MenuState { title: "PILIH MODEL".into(), items, selected: cur, kind: MenuKind::Model });
+        app.input_mode = InputMode::Menu;
+    } else {
+        apply_provider(arg, app);
+    }
+}
+
+fn apply_provider(code: &str, app: &mut App) {
+    match provider::by_code(code) {
+        Some(mut p) => match crate::config::ensure_api_key(p.code, p.name) {
+            Ok(k) => {
+                p.api_key = Some(k);
+                app.push_system(&format!("✓ model: {} ({})", p.name, p.model));
+                app.provider = p;
+            }
+            Err(e) => app.push_system(&format!("❌ {e}")),
+        },
+        None => app.push_system("❌ provider tidak dikenal (qwen / openai / openrouter / deepseek)"),
+    }
+}
+
+fn switch_lang(app: &mut App, arg: &str) {
+    const LANGS: [(&str, &str); 2] = [("id", "Indonesia"), ("en", "English")];
+    if arg == "id" || arg == "en" {
+        apply_language(arg, app);
+    } else if arg.is_empty() {
+        let cur   = LANGS.iter().position(|(c, _)| *c == app.voice.lang).unwrap_or(0);
+        let items = LANGS.iter().map(|(c, name)| {
+            let flag = if *c == app.voice.lang { " ←" } else { "" };
+            format!("{name}{flag}")
+        }).collect();
+        app.menu = Some(MenuState { title: "PILIH BAHASA".into(), items, selected: cur, kind: MenuKind::Language });
+        app.input_mode = InputMode::Menu;
+    } else {
+        let new = if app.voice.lang == "id" { "en" } else { "id" };
+        apply_language(new, app);
+    }
+}
+
+fn apply_language(lang: &str, app: &mut App) {
+    app.voice.lang = lang.to_string();
+    app.push_system(&format!("✓ bahasa: {}", lang.to_uppercase()));
+}
+
+fn trim_history(messages: &mut Vec<Message>, max: usize) {
+    // messages[0] = system prompt, jangan dihapus
+    while messages.len().saturating_sub(1) > max {
         messages.remove(1);
-        // Pastikan pesan pertama setelah system adalah 'user'.
+        // Jaga agar setelah remove[1] selanjutnya adalah pesan user
         while messages.len() > 1 && messages[1].role != "user" {
             messages.remove(1);
         }
     }
 }
 
-/// Opsi suara untuk satu sesi.
-pub struct VoiceOpts {
-    pub speak: bool,  // ucapkan jawaban (TTS via sidecar)
-    pub listen: bool, // ambil input lewat mic (STT via sidecar)
-    pub lang: String, // "en" / "id"
-}
-
-/// Jalankan REPL sampai user keluar (mode teks &/ suara).
-pub async fn run(
-    client: reqwest::Client,
-    mut provider: Provider,
-    limits: Limits,
-    mut voice: VoiceOpts,
-    w: usize,
-    h: usize,
-) -> Result<()> {
-    let mut messages: Vec<Message> = vec![Message::new("system", SYSTEM_PROMPT)];
-    let tools_schema = tools::tools_schema();
-
-    // Sidecar suara Python (hanya kalau mode suara diminta).
-    let mut bridge: Option<VoiceBridge> = if voice.speak || voice.listen {
-        ui::info("menyiapkan suara (memuat model)…");
-        let b = VoiceBridge::start();
-        match &b {
-            Some(_) => ui::info("✓ siap — silakan bicara."),
-            None => ui::warn("mode suara dimatikan — lanjut sebagai teks."),
-        }
-        b
-    } else {
-        None
-    };
-    let voice_listen = voice.listen && bridge.is_some();
-    let voice_speak = voice.speak && bridge.is_some();
-
-    loop {
-        // Ambil input: dari mic (mode dengar) atau ketik — bar ter-pin di bawah.
-        let teks: String = if voice_listen {
-            ui::draw_bar(w, h, "● SUARA", "bicara · ucap 'openai'/'english' utk ganti · /exit", &voice.lang);
-            ui::park_in_bar(h); // kursor "terkunci" di kotak input saat menunggu suara
-            let t = bridge.as_mut().unwrap().listen(&voice.lang);
-            if t.is_empty() {
-                continue;
-            }
-            ui::to_scroll(h); // pindah ke area gulir (kursor disembunyikan)
-            t
-        } else {
-            ui::draw_bar(w, h, "⌨ KETIK", "/model · /lan · /exit", &voice.lang);
-            match ui::read_line_bar(w, h) {
-                Some(l) => l,
-                None => {
-                    ui::bye("sampai jumpa");
-                    break;
-                }
-            }
-        };
-
-        if teks.is_empty() {
-            continue;
-        }
-        // --- Perintah slash (tidak dikirim ke LLM) ---------------------------
-        if teks == "/exit" || teks == "/quit" {
-            ui::bye("sampai jumpa");
-            break;
-        }
-        if teks == "/help" {
-            ui::info("perintah: /model [nama] · /lan [id|en] · /exit");
-            continue;
-        }
-        if let Some(rest) = teks.strip_prefix("/model") {
-            switch_model(rest.trim(), &mut provider);
-            continue;
-        }
-        if let Some(rest) = teks.strip_prefix("/lan") {
-            // terima /lan maupun /lang
-            switch_lang(rest.trim_start_matches('g').trim(), &mut voice);
-            continue;
-        }
-        // Perintah singkat lewat SUARA (ucapkan "openai", "english", dll).
-        if let Some((kind, val)) = detect_quick_command(&teks) {
-            match kind {
-                "model" => switch_model(val, &mut provider),
-                _ => switch_lang(val, &mut voice),
-            }
-            continue;
-        }
-
-        // Pesan biasa → echo apa yang diketik/diucapkan ke atas (bar abu-abu).
-        ui::user_echo(&teks);
-        messages.push(Message::new("user", &teks));
-        match handle_turn(&client, &provider, &limits, &tools_schema, &mut messages).await {
-            Ok(narasi) => {
-                if voice_speak && !narasi.is_empty() {
-                    bridge.as_mut().unwrap().speak(&narasi, &voice.lang);
-                }
-            }
-            Err(e) => ui::error(&format!("{e}")),
-        }
-        trim_history(&mut messages, limits.max_history);
-    }
-    Ok(())
-}
-
-/// `/model [kode]` — tanpa argumen: menu panah ↑/↓; dgn argumen: pindah langsung.
-fn switch_model(arg: &str, provider: &mut Provider) {
-    if arg.is_empty() {
-        let all = provider::all();
-        let items: Vec<String> = all
-            .iter()
-            .map(|p| {
-                let key = if p.api_key.is_some() { "●" } else { "○" };
-                let aktif = if p.code == provider.code { " (aktif)" } else { "" };
-                format!("{:<11} {}  {key}{aktif}", p.code, p.model)
-            })
-            .collect();
-        let cur = all.iter().position(|p| p.code == provider.code).unwrap_or(0);
-        match ui::select_menu("PILIH MODEL", &items, cur) {
-            Some(idx) => apply_provider(all[idx].code, provider),
-            None => ui::info("(batal)"),
-        }
-        return;
-    }
-    apply_provider(arg, provider);
-}
-
-/// Pindah provider berdasarkan kode (minta API key bila perlu).
-fn apply_provider(code: &str, provider: &mut Provider) {
-    match provider::by_code(code) {
-        Some(mut p) => match config::ensure_api_key(p.code, p.name) {
-            Ok(k) => {
-                p.api_key = Some(k);
-                ui::info(&format!("✓ pindah ke {} ({})", p.name, p.model));
-                *provider = p;
-            }
-            Err(e) => ui::error(&format!("{e}")),
-        },
-        None => ui::error("provider tak dikenal (qwen/openai/openrouter/deepseek)"),
-    }
-}
-
-/// Deteksi perintah singkat (≤3 kata) dari ucapan/ketikan: ganti model/bahasa.
-/// Hanya memicu kalau SELURUH teks cocok, agar tak salah picu di tengah kalimat.
 fn detect_quick_command(teks: &str) -> Option<(&'static str, &'static str)> {
     let t: String = teks
         .to_lowercase()
@@ -178,79 +341,14 @@ fn detect_quick_command(teks: &str) -> Option<(&'static str, &'static str)> {
         .filter(|c| c.is_alphanumeric() || c.is_whitespace())
         .collect();
     let t = t.trim();
-    if t.is_empty() || t.split_whitespace().count() > 3 {
-        return None;
-    }
+    if t.is_empty() || t.split_whitespace().count() > 3 { return None; }
     match t {
-        "qwen" | "kuen" | "kwen" => Some(("model", "qwen")),
-        "openai" | "open ai" | "gpt" | "chatgpt" => Some(("model", "openai")),
-        "openrouter" | "open router" | "router" => Some(("model", "openrouter")),
-        "deepseek" | "deep seek" | "dipsik" => Some(("model", "deepseek")),
-        "english" | "bahasa inggris" | "inggris" => Some(("lan", "en")),
-        "indonesia" | "bahasa indonesia" => Some(("lan", "id")),
+        "qwen" | "kuen" | "kwen"                       => Some(("model", "qwen")),
+        "openai" | "open ai" | "gpt" | "chatgpt"       => Some(("model", "openai")),
+        "openrouter" | "open router" | "router"         => Some(("model", "openrouter")),
+        "deepseek" | "deep seek" | "dipsik"             => Some(("model", "deepseek")),
+        "english" | "bahasa inggris" | "inggris"        => Some(("lan", "en")),
+        "indonesia" | "bahasa indonesia"                => Some(("lan", "id")),
         _ => None,
     }
-}
-
-/// `/lan [id|en]` — tanpa argumen: menu panah; dgn argumen: set langsung.
-fn switch_lang(arg: &str, voice: &mut VoiceOpts) {
-    const LANGS: [(&str, &str); 2] = [("id", "Indonesia"), ("en", "English")];
-    let new = if arg == "id" || arg == "en" {
-        arg.to_string()
-    } else if arg.is_empty() {
-        let items: Vec<String> = LANGS
-            .iter()
-            .map(|(c, name)| {
-                let aktif = if *c == voice.lang { " (aktif)" } else { "" };
-                format!("{name}{aktif}")
-            })
-            .collect();
-        let cur = LANGS.iter().position(|(c, _)| *c == voice.lang).unwrap_or(0);
-        match ui::select_menu("PILIH BAHASA", &items, cur) {
-            Some(idx) => LANGS[idx].0.to_string(),
-            None => {
-                ui::info("(batal)");
-                return;
-            }
-        }
-    } else {
-        // argumen tak dikenal → toggle
-        if voice.lang == "id" { "en".to_string() } else { "id".to_string() }
-    };
-    ui::info(&format!("bahasa: {}", new.to_uppercase()));
-    voice.lang = new;
-}
-
-/// Satu giliran: panggil model, eksekusi tool yang diminta, ulangi sampai
-/// model selesai (tak minta tool lagi) atau batas iterasi tercapai.
-async fn handle_turn(
-    client: &reqwest::Client,
-    provider: &Provider,
-    limits: &Limits,
-    tools_schema: &serde_json::Value,
-    messages: &mut Vec<Message>,
-) -> Result<String> {
-    for _ in 0..limits.max_tool_iters {
-        let (narasi, tool_calls) =
-            llm::stream_once(client, provider, limits, messages, tools_schema).await?;
-
-        messages.push(Message::assistant(narasi.clone(), tool_calls.clone()));
-
-        // Tidak ada tool yang diminta → giliran selesai; kembalikan narasinya.
-        if tool_calls.is_empty() {
-            return Ok(narasi);
-        }
-
-        // Eksekusi tiap tool, kirim hasilnya kembali ke model.
-        for tc in &tool_calls {
-            ui::tool_line(&tc.function.name, &tools::summarize_args(&tc.function.arguments));
-            let hasil = tools::dispatch(&tc.function.name, &tc.function.arguments);
-            messages.push(Message::tool_result(&tc.id, hasil));
-        }
-    }
-    ui::info(&format!(
-        "batas {} langkah tercapai, berhenti dulu.",
-        limits.max_tool_iters
-    ));
-    Ok(String::new())
 }

@@ -80,7 +80,9 @@ def main() -> None:
                 voice.speak(req.get("text", ""))
                 _send({"ok": True})
             elif cmd == "listen":
+                print("  [mic] mendengarkan…", file=sys.stderr, flush=True)
                 text = listen.listen_auto()
+                print(f"  [mic] transkripsi: {text!r}", file=sys.stderr, flush=True)
                 _send({"ok": True, "text": text})
             else:
                 _send({"ok": False, "error": f"unknown cmd: {cmd}"})

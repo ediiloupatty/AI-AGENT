@@ -1,28 +1,23 @@
-//! llm.rs — client LLM streaming + function calling (chat-completions).
-//!
-//! Port bagian streaming voca/agent.py: kirim pesan + skema tools, terima delta
-//! (teks & tool_calls) bertahap, cetak narasi, rakit tool_calls, kembalikan
-//! (narasi, tool_calls). Ada retry untuk error koneksi sementara.
-
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::io::Write;
+use tokio::sync::mpsc;
 
+use crate::app::AppEvent;
 use crate::config::Limits;
 use crate::provider::Provider;
-use crate::ui;
 
-// --- Pesan percakapan (format OpenAI) -------------------------------------
-#[derive(Clone, Serialize, Deserialize)]
+// ── Message types (format OpenAI chat-completions) ───────────────────────────
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FunctionCall {
     pub name: String,
     pub arguments: String,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
     #[serde(rename = "type")]
@@ -30,7 +25,7 @@ pub struct ToolCall {
     pub function: FunctionCall,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -43,9 +38,14 @@ pub struct Message {
 
 impl Message {
     pub fn new(role: &str, content: impl Into<String>) -> Self {
-        Message { role: role.to_string(), content: Some(content.into()),
-                  tool_calls: None, tool_call_id: None }
+        Message {
+            role: role.to_string(),
+            content: Some(content.into()),
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
+
     pub fn assistant(content: String, tool_calls: Vec<ToolCall>) -> Self {
         Message {
             role: "assistant".to_string(),
@@ -54,11 +54,18 @@ impl Message {
             tool_call_id: None,
         }
     }
+
     pub fn tool_result(id: &str, content: String) -> Self {
-        Message { role: "tool".to_string(), content: Some(content),
-                  tool_calls: None, tool_call_id: Some(id.to_string()) }
+        Message {
+            role: "tool".to_string(),
+            content: Some(content),
+            tool_calls: None,
+            tool_call_id: Some(id.to_string()),
+        }
     }
 }
+
+// ── Request / SSE response types ─────────────────────────────────────────────
 
 #[derive(Serialize)]
 struct ChatRequest<'a> {
@@ -70,7 +77,6 @@ struct ChatRequest<'a> {
     tools: Option<&'a Value>,
 }
 
-// --- Bentuk potongan stream SSE -------------------------------------------
 #[derive(Deserialize)]
 struct StreamChunk {
     choices: Vec<StreamChoice>,
@@ -96,36 +102,58 @@ struct DeltaFunction {
     arguments: Option<String>,
 }
 
-/// Satu panggilan stream (dengan retry). Return (narasi, tool_calls).
-pub async fn stream_once(
-    client: &reqwest::Client,
-    provider: &Provider,
-    limits: &Limits,
-    messages: &[Message],
-    tools: &Value,
-) -> Result<(String, Vec<ToolCall>)> {
+struct AccTool { id: String, name: String, args: String }
+
+// ── Debug logging (aktif hanya saat VOCA_DEBUG=1) ────────────────────────────
+
+fn debug_log(msg: &str) {
+    if std::env::var("VOCA_DEBUG").as_deref() == Ok("1") {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true).append(true).open("voca.log")
+        {
+            let _ = std::io::Write::write_fmt(&mut f, format_args!("[llm] {msg}\n"));
+        }
+    }
+}
+
+// ── Public API ───────────────────────────────────────────────────────────────
+
+pub async fn stream_to_channel(
+    client: reqwest::Client,
+    provider: Provider,
+    limits: Limits,
+    messages: Vec<Message>,
+    tools: Value,
+    tx: mpsc::UnboundedSender<AppEvent>,
+) {
     let mut attempt: u32 = 0;
     loop {
         attempt += 1;
-        match try_stream(client, provider, limits, messages, tools).await {
-            Ok(res) => return Ok(res),
+        match try_stream(&client, &provider, &limits, &messages, &tools, &tx).await {
+            Ok((full, tool_calls)) => {
+                debug_log(&format!("selesai: {} karakter, {} tool", full.len(), tool_calls.len()));
+                let _ = tx.send(AppEvent::LlmComplete(full, tool_calls));
+                return;
+            }
             Err(e) => {
                 if attempt >= limits.llm_max_retries {
-                    return Err(e).context("LLM gagal setelah beberapa percobaan");
+                    let _ = tx.send(AppEvent::LlmError(
+                        format!("LLM gagal setelah {attempt} percobaan: {e}")
+                    ));
+                    return;
                 }
-                let delay = limits.llm_retry_base_delay * 2f64.powi((attempt - 1) as i32);
-                ui::warn(&format!("koneksi LLM bermasalah ({e}); coba lagi dalam {delay:.0}s…"));
+                let delay = limits.llm_retry_base_delay
+                    * 2f64.powi((attempt - 1) as i32);
+                let _ = tx.send(AppEvent::LlmError(
+                    format!("Koneksi LLM bermasalah ({e}); coba lagi dalam {delay:.0}s…")
+                ));
                 tokio::time::sleep(std::time::Duration::from_secs_f64(delay)).await;
             }
         }
     }
 }
 
-struct AccTool {
-    id: String,
-    name: String,
-    args: String,
-}
+// ── Internal: satu percobaan streaming ──────────────────────────────────────
 
 async fn try_stream(
     client: &reqwest::Client,
@@ -133,9 +161,19 @@ async fn try_stream(
     limits: &Limits,
     messages: &[Message],
     tools: &Value,
+    tx: &mpsc::UnboundedSender<AppEvent>,
 ) -> Result<(String, Vec<ToolCall>)> {
-    let api_key = provider.api_key.as_deref().context("provider tidak punya API key")?;
-    let url = format!("{}/chat/completions", provider.base_url.trim_end_matches('/'));
+    let api_key = provider
+        .api_key
+        .as_deref()
+        .context("provider tidak punya API key")?;
+    let url = format!(
+        "{}/chat/completions",
+        provider.base_url.trim_end_matches('/')
+    );
+
+    debug_log(&format!("→ POST {url}"));
+
     let body = ChatRequest {
         model: &provider.model,
         messages,
@@ -149,64 +187,54 @@ async fn try_stream(
         .bearer_auth(api_key)
         .json(&body)
         .send()
-        .await?
-        .error_for_status()?;
+        .await
+        .context("gagal menghubungi API")?;
 
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body   = resp.text().await.unwrap_or_default();
+        debug_log(&format!("HTTP {status} ← {body}"));
+        return Err(anyhow::anyhow!("HTTP {status}: {body}"));
+    }
+
+    // ── Parse SSE stream ─────────────────────────────────────────────────────
     let mut stream = resp.bytes_stream();
-    let mut buf = String::new();
-    let mut full = String::new();
-    let mut printed = false;
+    let mut buf    = String::new();
+    let mut full   = String::new();
     let mut acc: BTreeMap<usize, AccTool> = BTreeMap::new();
-    let mut stdout = std::io::stdout();
 
     while let Some(chunk) = stream.next().await {
-        let bytes = chunk?;
-        buf.push_str(&String::from_utf8_lossy(&bytes));
+        buf.push_str(&String::from_utf8_lossy(&chunk?));
+
         while let Some(pos) = buf.find('\n') {
             let line = buf[..pos].trim().to_string();
             buf.drain(..=pos);
+
             let Some(data) = line.strip_prefix("data:") else { continue };
             let data = data.trim();
-            if data == "[DONE]" {
-                continue;
-            }
+            if data == "[DONE]" { continue; }
+
             let Ok(parsed) = serde_json::from_str::<StreamChunk>(data) else { continue };
             let Some(choice) = parsed.choices.into_iter().next() else { continue };
 
             if let Some(piece) = choice.delta.content {
                 if !piece.is_empty() {
-                    if !printed {
-                        ui::assistant_header();
-                        printed = true;
-                    }
-                    print!("{piece}");
-                    stdout.flush().ok();
+                    let _ = tx.send(AppEvent::LlmChunk(piece.clone()));
                     full.push_str(&piece);
                 }
             }
+
             for tc in choice.delta.tool_calls.unwrap_or_default() {
                 let slot = acc.entry(tc.index).or_insert_with(|| AccTool {
-                    id: String::new(),
-                    name: String::new(),
-                    args: String::new(),
+                    id: String::new(), name: String::new(), args: String::new(),
                 });
-                if let Some(id) = tc.id {
-                    slot.id = id;
-                }
-                if let Some(f) = tc.function {
-                    if let Some(n) = f.name {
-                        slot.name.push_str(&n);
-                    }
-                    if let Some(a) = f.arguments {
-                        slot.args.push_str(&a);
-                    }
+                if let Some(id) = tc.id                   { slot.id.push_str(&id); }
+                if let Some(f)  = tc.function {
+                    if let Some(n) = f.name      { slot.name.push_str(&n); }
+                    if let Some(a) = f.arguments { slot.args.push_str(&a); }
                 }
             }
         }
-    }
-    if printed {
-        println!();
-        println!();
     }
 
     let tool_calls: Vec<ToolCall> = acc
