@@ -202,7 +202,7 @@ pub fn select_menu(title: &str, items: &[String], current: usize) -> Option<usiz
         println!();
     }
     let up = height - 1; // dari baris hint kembali ke baris judul
-    print!("\x1b[{up}F");
+    print!("\x1b[{up}F\x1b[?25l"); // ke judul + sembunyikan kursor selama menu
     render_menu(title, items, idx);
 
     let _ = enable_raw_mode();
@@ -229,6 +229,7 @@ pub fn select_menu(title: &str, items: &[String], current: usize) -> Option<usiz
         }
     };
     let _ = disable_raw_mode();
+    print!("\x1b[?25h"); // tampilkan kembali kursor
     println!(); // baris bersih di bawah menu
     io::stdout().flush().ok();
     chosen

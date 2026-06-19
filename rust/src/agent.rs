@@ -191,11 +191,30 @@ fn detect_quick_command(teks: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
-/// `/lan [id|en]` — set bahasa suara; tanpa argumen = toggle.
+/// `/lan [id|en]` — tanpa argumen: menu panah; dgn argumen: set langsung.
 fn switch_lang(arg: &str, voice: &mut VoiceOpts) {
-    let new = match arg {
-        "id" | "en" => arg.to_string(),
-        _ => if voice.lang == "id" { "en".to_string() } else { "id".to_string() },
+    const LANGS: [(&str, &str); 2] = [("id", "Indonesia"), ("en", "English")];
+    let new = if arg == "id" || arg == "en" {
+        arg.to_string()
+    } else if arg.is_empty() {
+        let items: Vec<String> = LANGS
+            .iter()
+            .map(|(c, name)| {
+                let aktif = if *c == voice.lang { " (aktif)" } else { "" };
+                format!("{name}{aktif}")
+            })
+            .collect();
+        let cur = LANGS.iter().position(|(c, _)| *c == voice.lang).unwrap_or(0);
+        match ui::select_menu("PILIH BAHASA", &items, cur) {
+            Some(idx) => LANGS[idx].0.to_string(),
+            None => {
+                ui::info("(batal)");
+                return;
+            }
+        }
+    } else {
+        // argumen tak dikenal → toggle
+        if voice.lang == "id" { "en".to_string() } else { "id".to_string() }
     };
     ui::info(&format!("bahasa: {}", new.to_uppercase()));
     voice.lang = new;
