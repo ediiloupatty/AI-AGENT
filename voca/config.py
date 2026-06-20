@@ -114,6 +114,9 @@ SPEECH_START_TIMEOUT = float(os.getenv("SPEECH_START_TIMEOUT", "8.0"))
 # Ambang Silero VAD (0–1): prob ≥ nilai ini dianggap "ada ucapan". Naikkan kalau
 # noise masih lolos; turunkan kalau ucapan pelan tak tertangkap.
 VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "0.5"))
+# Model Silero VAD (ONNX) yang dijalankan onnxruntime — dibundel dalam paket
+# voca/. Override hanya bila ingin pakai file model lain.
+VAD_MODEL = os.getenv("VAD_MODEL", str(Path(__file__).resolve().parent / "silero_vad.onnx"))
 # Barge-in: izinkan user MENYELA saat asisten bicara (TTS) dengan langsung bicara.
 # EKSPERIMENTAL & default MATI — tanpa acoustic echo cancellation, mic akan
 # mendengar suara TTS sendiri & langsung "menyela". Aktifkan HANYA dengan headphone:

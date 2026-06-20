@@ -53,31 +53,47 @@ def _get_model() -> WhisperModel:
     return _model
 
 
-# ── Voice Activity Detection (VAD) — Silero (neural) ────────────────────────
-# Penangkapan suara sepenuhnya memakai Silero VAD: deteksi ucapan neural yang
-# tahan noise & menangkap suara pelan. Ini DEPENDENSI WAJIB (lihat install.sh /
-# requirements.txt) — tak ada lagi fallback RMS.
+# ── Voice Activity Detection (VAD) — Silero (neural, via onnxruntime) ────────
+# Penangkapan suara memakai model Silero VAD (silero_vad.onnx) yang dijalankan
+# lewat onnxruntime — runtime inferensi ringan yang SUDAH dipakai Piper. Tak
+# perlu torch (~1GB) lagi: model & bobotnya identik dengan versi torch, hasil
+# deteksi sama, ukuran install jauh lebih kecil. Modelnya dibundel di
+# voca/silero_vad.onnx (tak perlu unduh terpisah). DEPENDENSI WAJIB — tak ada
+# fallback RMS.
 
 _VAD_INSTALL_HINT = (
-    "VAD Silero tidak tersedia. Pasang dulu:\n"
-    "    pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu\n"
-    "    pip install silero-vad"
+    "VAD Silero tidak tersedia. Pastikan 'onnxruntime' terpasang\n"
+    "    pip install onnxruntime\n"
+    "dan file model voca/silero_vad.onnx ada."
 )
 
-_vad_model = None
+_vad_session = None
+
+
+def _vad_model_path() -> str:
+    """Lokasi silero_vad.onnx (override via config.VAD_MODEL, default: dalam paket)."""
+    return getattr(config, "VAD_MODEL", "") or os.path.join(
+        os.path.dirname(__file__), "silero_vad.onnx"
+    )
 
 
 def _load_silero():
-    """Muat model Silero VAD sekali. Raise RuntimeError (pesan jelas) bila gagal."""
-    global _vad_model
-    if _vad_model is None:
+    """Muat sesi onnxruntime Silero VAD sekali. Raise RuntimeError (jelas) bila gagal."""
+    global _vad_session
+    if _vad_session is None:
         try:
-            from silero_vad import load_silero_vad
-            _vad_model = load_silero_vad()
-            ui.info("  VAD: Silero (neural) aktif.")
+            import onnxruntime as ort
+            opts = ort.SessionOptions()
+            opts.inter_op_num_threads = 1
+            opts.intra_op_num_threads = 1
+            _vad_session = ort.InferenceSession(
+                _vad_model_path(), sess_options=opts,
+                providers=["CPUExecutionProvider"],
+            )
+            ui.info("  VAD: Silero (onnxruntime) aktif.")
         except Exception as e:
             raise RuntimeError(f"{_VAD_INSTALL_HINT}\n  (detail: {e})") from e
-    return _vad_model
+    return _vad_session
 
 
 def preload_vad() -> None:
@@ -97,16 +113,15 @@ class _SileroGate:
     """Deteksi suara neural via Silero VAD (butuh window 512-sampel @16kHz)."""
     WIN = 512
 
+    CTX = 64  # Silero memprepend 64 sampel konteks dari window sebelumnya
+
     def __init__(self, threshold: float):
-        import torch
-        self._torch = torch
         self.threshold = threshold
         self.buf = np.empty(0, dtype=np.float32)
-        model = _load_silero()
-        try:
-            model.reset_states()
-        except Exception:
-            pass
+        self._sess = _load_silero()
+        self._sr = np.array(SAMPLE_RATE, dtype=np.int64)
+        self._state = np.zeros((2, 1, 128), dtype=np.float32)  # state streaming Silero
+        self._ctx = np.zeros(self.CTX, dtype=np.float32)       # konteks 64 sampel
 
     def voiced(self, chunk: np.ndarray) -> bool:
         # Akumulasi lalu proses per window 512-sampel; voiced bila ada window
@@ -118,8 +133,15 @@ class _SileroGate:
         while len(self.buf) >= self.WIN:
             win = self.buf[:self.WIN]
             self.buf = self.buf[self.WIN:]
-            prob = _vad_model(self._torch.from_numpy(win), SAMPLE_RATE).item()
-            if prob >= self.threshold:
+            # Silero butuh input = 64 sampel konteks + 512 window (= 576). onnxruntime
+            # kembalikan [output, stateN] sesuai urutan graf; state & konteks dibawa
+            # antar-window agar deteksi konsisten (mode streaming).
+            x = np.concatenate([self._ctx, win]).reshape(1, -1).astype(np.float32)
+            out, self._state = self._sess.run(
+                None, {"input": x, "state": self._state, "sr": self._sr},
+            )
+            self._ctx = win[-self.CTX:]
+            if float(out.reshape(-1)[0]) >= self.threshold:
                 hit = True
         return hit
 
@@ -306,19 +328,34 @@ def _trim_to_speech(audio: np.ndarray) -> np.ndarray | None:
     Bila Silero tak tersedia/gagal, kembalikan audio apa adanya (jangan menghambat).
     """
     try:
-        from silero_vad import get_speech_timestamps
-        model = _load_silero()
+        sess = _load_silero()
     except Exception:
         return audio
-    ts = get_speech_timestamps(
-        audio, model, sampling_rate=SAMPLE_RATE, threshold=config.VAD_THRESHOLD,
-    )
-    if not ts:
+    a = np.asarray(audio, dtype=np.float32).reshape(-1)
+    win = _SileroGate.WIN
+    if len(a) < win:
+        return a
+    sr = np.array(SAMPLE_RATE, dtype=np.int64)
+    state = np.zeros((2, 1, 128), dtype=np.float32)
+    ctx = np.zeros(_SileroGate.CTX, dtype=np.float32)  # konteks 64 sampel (lihat _SileroGate)
+    thr = config.VAD_THRESHOLD
+    # Geser window 512-sampel; catat rentang [first..last] yang melewati ambang.
+    first = last = None
+    for i in range(0, len(a) - win + 1, win):
+        chunk = a[i:i + win]
+        x = np.concatenate([ctx, chunk]).reshape(1, -1).astype(np.float32)  # 64+512
+        out, state = sess.run(None, {"input": x, "state": state, "sr": sr})
+        ctx = chunk[-_SileroGate.CTX:]
+        if float(out.reshape(-1)[0]) >= thr:
+            if first is None:
+                first = i
+            last = i + win
+    if first is None:
         return None
     pad = int(0.15 * SAMPLE_RATE)  # 150 ms bantal agar kata tepi tak terpotong
-    start = max(0, ts[0]["start"] - pad)
-    end = min(len(audio), ts[-1]["end"] + pad)
-    return audio[start:end]
+    start = max(0, first - pad)
+    end = min(len(a), last + pad)
+    return a[start:end]
 
 
 def transcribe(audio) -> str:

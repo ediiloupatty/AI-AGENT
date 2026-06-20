@@ -84,12 +84,10 @@ if [ "$WITH_VOICE" = "1" ]; then
   vpy="$VOCA_HOME/.venv/bin/python"
   say "  Menyiapkan Python terisolasi + virtualenv (uv)..."
   "$UV" venv "$VOCA_HOME/.venv" --python 3.12 --python-preference only-managed || die "gagal menyiapkan Python via uv"
-  say "  Memasang Whisper + Piper + audio..."
-  "$UV" pip install --python "$vpy" -q faster-whisper piper-tts sounddevice numpy python-dotenv
-  # VAD neural Silero (wajib). torch CPU-only agar tak menarik CUDA ber-GB.
-  say "  Memasang VAD Silero (torch CPU, ~200MB)..."
-  "$UV" pip install --python "$vpy" -q torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-  "$UV" pip install --python "$vpy" -q silero-vad
+  # VAD Silero kini lewat onnxruntime (model dibundel di source: voca/silero_vad.onnx),
+  # jadi TAK perlu torch (~1GB) lagi → install jauh lebih kecil & cepat.
+  say "  Memasang Whisper + Piper + VAD (onnxruntime) + audio..."
+  "$UV" pip install --python "$vpy" -q faster-whisper piper-tts onnxruntime sounddevice numpy python-dotenv
 
   say "  Mengunduh model suara Piper (~120MB)..."
   mkdir -p "$VOCA_HOME/models"

@@ -74,12 +74,10 @@ if ($env:VOCA_NO_VOICE -eq "1") {
     Step 46 "Menyiapkan Python terisolasi + virtualenv..."
     & $uv venv $venv --python 3.12 --python-preference only-managed
 
-    Step 60 "Memasang Whisper (dengar) + Piper (suara)..."
-    & $uv pip install --python $venvpy faster-whisper piper-tts sounddevice numpy python-dotenv
-
-    Step 76 "Memasang VAD Silero (torch CPU, ~200MB)..."
-    & $uv pip install --python $venvpy torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-    & $uv pip install --python $venvpy silero-vad
+    # VAD Silero kini lewat onnxruntime (model dibundel di source: voca\silero_vad.onnx),
+    # jadi TAK perlu torch (~1GB) lagi → install jauh lebih kecil & cepat.
+    Step 68 "Memasang Whisper + Piper + VAD (onnxruntime) + audio..."
+    & $uv pip install --python $venvpy faster-whisper piper-tts onnxruntime sounddevice numpy python-dotenv
 
     Step 88 "Mengunduh model suara (id + en, ~120MB)..."
     $models = Join-Path $home_ "models"
