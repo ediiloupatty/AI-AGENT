@@ -5,9 +5,9 @@
 #
 #  Dengan bar progres 1-100%:
 #    • Binary inti (Rust) → perintah `voca`  (mode teks: NOL prasyarat)
-#    • Fitur SUARA (Whisper + Piper + Silero). Python dipasang OTOMATIS bila
-#      belum ada (winget → fallback installer resmi python.org, per-user, tanpa
-#      admin). TIDAK butuh Git — source diambil via ZIP.
+#    • Fitur SUARA (Whisper + Piper + Silero). TIDAK memasang apa pun ke sistem:
+#      Python dikelola `uv` dan DIBUNGKUS di dalam folder project (%USERPROFILE%\.voca).
+#      Hapus folder itu → mesin bersih total (tak ada Python/Git nyangkut di sistem).
 #    • Model suara id + en, lalu minta API key, lalu jalankan `voca` DI SINI
 #      (tanpa membuka window baru).
 #
@@ -27,20 +27,6 @@ $ACT = "Memasang Voca"
 function Step($pct, $msg) { Write-Progress -Activity $ACT -Status $msg -PercentComplete $pct }
 function Note($m) { Write-Host "  $m" -ForegroundColor DarkGray }
 
-# Cari interpreter Python yang valid (hindari stub Microsoft Store yang kosong).
-function Find-Python {
-  foreach ($c in @("python", "py")) {
-    if (Get-Command $c -ErrorAction SilentlyContinue) {
-      try { $v = (& $c --version) 2>&1 | Out-String } catch { $v = "" }
-      if ($v -match "Python 3\.\d") { return $c }
-    }
-  }
-  $f = Get-ChildItem "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe" -ErrorAction SilentlyContinue |
-       Sort-Object FullName -Descending | Select-Object -First 1
-  if ($f) { return $f.FullName }
-  return $null
-}
-
 # ── 1) Binary inti (Rust) — mode teks, nol prasyarat ────────────────────────
 Step 5 "Menyiapkan folder..."
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
@@ -53,29 +39,17 @@ $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($userPath -notlike "*$dir*") { [Environment]::SetEnvironmentVariable("Path", "$userPath;$dir", "User") }
 if (";$env:Path;" -notlike "*;$dir;*") { $env:Path = "$env:Path;$dir" }   # sesi ini juga → tak perlu window baru
 
-# ── 2) Suara (Python dipasang otomatis bila perlu; tanpa Git) ───────────────
+# ── 2) Suara — Python terisolasi (uv), TANPA menyentuh sistem & tanpa git ────
 $voice = $false
 if ($env:VOCA_NO_VOICE -eq "1") {
   Step 18 "Melewati suara (VOCA_NO_VOICE=1)."
 } else {
   try {
-    $py = Find-Python
-    if (-not $py) {
-      Step 22 "Python belum ada — memasang otomatis (sekali, 1-2 menit)..."
-      if (Get-Command winget -ErrorAction SilentlyContinue) {
-        winget install -e --id Python.Python.3.12 --scope user --silent `
-          --accept-package-agreements --accept-source-agreements *>$null
-      } else {
-        $pyinst = Join-Path $env:TEMP "python-setup.exe"
-        curl.exe -fsSL "https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe" -o $pyinst
-        Start-Process -FilePath $pyinst -ArgumentList "/quiet","InstallAllUsers=0","PrependPath=1","Include_pip=1" -Wait
-      }
-      $py = Find-Python
-    }
-    if (-not $py) { throw "Python tak bisa dipasang otomatis — pasang manual dari python.org lalu jalankan ulang." }
-
-    Step 30 "Mengambil kode suara (ZIP, tanpa Git)..."
     New-Item -ItemType Directory -Force -Path $home_ | Out-Null
+
+    # Source paket Python 'voca' via ZIP (tanpa git). File source ditimpa,
+    # .venv/ & python/ & models/ yang sudah ada tetap dipertahankan.
+    Step 26 "Mengambil kode suara (ZIP, tanpa git)..."
     $zip = Join-Path $env:TEMP "voca-src.zip"
     $ex  = Join-Path $env:TEMP "voca-src"
     if (Test-Path $ex) { Remove-Item -Recurse -Force $ex }
@@ -83,20 +57,31 @@ if ($env:VOCA_NO_VOICE -eq "1") {
     Expand-Archive $zip -DestinationPath $ex -Force
     Copy-Item -Path (Join-Path $ex "voice-coding-assistant-main\*") -Destination $home_ -Recurse -Force
 
-    $venv  = Join-Path $home_ ".venv"
-    $pyexe = Join-Path $venv "Scripts\python.exe"
-    Step 40 "Membuat virtualenv..."
-    & $py -m venv $venv
-    & $pyexe -m pip install --upgrade pip --quiet
+    # uv = pengelola Python portabel (1 exe, tanpa deps). Python yang diunduhnya
+    # DIBUNGKUS di $home_\python — bukan instalasi sistem, tak muncul di PATH/registry.
+    Step 36 "Mengunduh uv (pengelola Python portabel)..."
+    $bin = Join-Path $home_ "bin"; New-Item -ItemType Directory -Force -Path $bin | Out-Null
+    $uvzip = Join-Path $env:TEMP "uv.zip"
+    curl.exe -fsSL "https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-pc-windows-msvc.zip" -o $uvzip
+    Expand-Archive $uvzip -DestinationPath $bin -Force
+    $uv = Join-Path $bin "uv.exe"
 
-    Step 55 "Memasang Whisper (dengar) + Piper (suara)..."
-    & $pyexe -m pip install --quiet faster-whisper piper-tts sounddevice numpy python-dotenv
+    $env:UV_PYTHON_INSTALL_DIR = Join-Path $home_ "python"   # Python ter-scope ke project
+    $env:UV_CACHE_DIR          = Join-Path $home_ ".cache"   # cache pun di dalam project
+    $venv   = Join-Path $home_ ".venv"
+    $venvpy = Join-Path $venv  "Scripts\python.exe"
 
-    Step 72 "Memasang VAD Silero (torch CPU, ~200MB)..."
-    & $pyexe -m pip install --quiet torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-    & $pyexe -m pip install --quiet silero-vad
+    Step 46 "Menyiapkan Python terisolasi + virtualenv..."
+    & $uv venv $venv --python 3.12 --python-preference only-managed
 
-    Step 86 "Mengunduh model suara (id + en, ~120MB)..."
+    Step 60 "Memasang Whisper (dengar) + Piper (suara)..."
+    & $uv pip install --python $venvpy faster-whisper piper-tts sounddevice numpy python-dotenv
+
+    Step 76 "Memasang VAD Silero (torch CPU, ~200MB)..."
+    & $uv pip install --python $venvpy torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+    & $uv pip install --python $venvpy silero-vad
+
+    Step 88 "Mengunduh model suara (id + en, ~120MB)..."
     $models = Join-Path $home_ "models"
     New-Item -ItemType Directory -Force -Path $models | Out-Null
     $PB = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
@@ -108,9 +93,9 @@ if ($env:VOCA_NO_VOICE -eq "1") {
     }
     foreach ($url in $files.Keys) { curl.exe -fsSL $url -o (Join-Path $models $files[$url]) }
 
-    [Environment]::SetEnvironmentVariable("VOCA_VOICE_PYTHON", $pyexe, "User")
-    [Environment]::SetEnvironmentVariable("VOCA_VOICE_HOME",   $home_, "User")
-    $env:VOCA_VOICE_PYTHON = $pyexe; $env:VOCA_VOICE_HOME = $home_
+    [Environment]::SetEnvironmentVariable("VOCA_VOICE_PYTHON", $venvpy, "User")
+    [Environment]::SetEnvironmentVariable("VOCA_VOICE_HOME",   $home_,  "User")
+    $env:VOCA_VOICE_PYTHON = $venvpy; $env:VOCA_VOICE_HOME = $home_
     $voice = $true
   } catch {
     Write-Host "  ! Setup suara gagal: $($_.Exception.Message)" -ForegroundColor Yellow

@@ -49,9 +49,8 @@ add_env() { # add_env NAMA NILAI  → tulis export ke shell rc bila belum ada
 }
 
 if [ "$WITH_VOICE" = "1" ]; then
-  say "Menyiapkan sidecar suara (Python) di $VOCA_HOME ..."
-  command -v python3 >/dev/null || die "python3 diperlukan untuk --with-voice (pasang dari paket distro / python.org)."
-  command -v tar     >/dev/null || die "tar diperlukan untuk --with-voice."
+  say "Menyiapkan sidecar suara (Python terisolasi) di $VOCA_HOME ..."
+  command -v tar >/dev/null || die "tar diperlukan untuk --with-voice."
 
   # Ambil kode (paket Python 'voca') via TARBALL — tanpa git. --strip-components=1
   # membuang folder atas (voice-coding-assistant-main/) langsung ke $VOCA_HOME;
@@ -64,14 +63,33 @@ if [ "$WITH_VOICE" = "1" ]; then
   tar -xzf "$src_tar" -C "$VOCA_HOME" --strip-components=1 || die "gagal mengekstrak source"
   rm -f "$src_tar"
 
-  say "  Memasang dependensi suara (bisa beberapa menit)..."
-  python3 -m venv "$VOCA_HOME/.venv"
-  "$VOCA_HOME/.venv/bin/pip" install -q --upgrade pip
-  "$VOCA_HOME/.venv/bin/pip" install -q faster-whisper piper-tts sounddevice numpy python-dotenv
+  # uv = pengelola Python portabel (1 binary, tanpa deps). Python yang diunduhnya
+  # DIBUNGKUS di $VOCA_HOME/python (bukan instalasi sistem, tak menyentuh PATH).
+  # Hapus $VOCA_HOME → mesin bersih total. --python-preference only-managed
+  # menjamin selalu pakai Python terbungkus, bukan python sistem user.
+  case "$os" in
+    Linux)  uv_asset="uv-x86_64-unknown-linux-gnu.tar.gz" ;;
+    Darwin) case "$arch" in arm64|aarch64) uv_asset="uv-aarch64-apple-darwin.tar.gz" ;; *) uv_asset="uv-x86_64-apple-darwin.tar.gz" ;; esac ;;
+  esac
+  say "  Mengunduh uv (pengelola Python portabel)..."
+  mkdir -p "$VOCA_HOME/bin"
+  uv_tar="$(mktemp)"
+  curl -fsSL "https://github.com/astral-sh/uv/releases/latest/download/$uv_asset" -o "$uv_tar" || die "gagal mengunduh uv"
+  tar -xzf "$uv_tar" -C "$VOCA_HOME/bin" --strip-components=1 || die "gagal mengekstrak uv"
+  rm -f "$uv_tar"
+  UV="$VOCA_HOME/bin/uv"
+
+  export UV_PYTHON_INSTALL_DIR="$VOCA_HOME/python"   # Python ter-scope ke project
+  export UV_CACHE_DIR="$VOCA_HOME/.cache"            # cache pun di dalam project
+  vpy="$VOCA_HOME/.venv/bin/python"
+  say "  Menyiapkan Python terisolasi + virtualenv (uv)..."
+  "$UV" venv "$VOCA_HOME/.venv" --python 3.12 --python-preference only-managed || die "gagal menyiapkan Python via uv"
+  say "  Memasang Whisper + Piper + audio..."
+  "$UV" pip install --python "$vpy" -q faster-whisper piper-tts sounddevice numpy python-dotenv
   # VAD neural Silero (wajib). torch CPU-only agar tak menarik CUDA ber-GB.
   say "  Memasang VAD Silero (torch CPU, ~200MB)..."
-  "$VOCA_HOME/.venv/bin/pip" install -q torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-  "$VOCA_HOME/.venv/bin/pip" install -q silero-vad
+  "$UV" pip install --python "$vpy" -q torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+  "$UV" pip install --python "$vpy" -q silero-vad
 
   say "  Mengunduh model suara Piper (~120MB)..."
   mkdir -p "$VOCA_HOME/models"
