@@ -2,8 +2,8 @@
 #   irm https://raw.githubusercontent.com/ediiloupatty/voice-coding-assistant/main/install.ps1 | iex
 #
 # Override: $env:VOCA_BASE_URL (sumber binary), $env:VOCA_INSTALL_DIR (folder).
-# Catatan: mode suara (--voice/--listen) butuh sidecar Python; di Windows
-# siapkan manual (lihat rust/README.md) lalu set VOCA_VOICE_PYTHON/HOME.
+# Catatan: mode suara (ngomong) butuh sidecar Python. Pasang dengan:
+#   irm https://raw.githubusercontent.com/ediiloupatty/voice-coding-assistant/main/install-voice.ps1 | iex
 $ErrorActionPreference = "Stop"
 
 $repo = "ediiloupatty/voice-coding-assistant"
@@ -27,3 +27,5 @@ if ($userPath -notlike "*$dir*") {
 
 Write-Host "Selesai. Jalankan: voca"
 Write-Host "  (API key diminta otomatis saat pertama dijalankan)"
+Write-Host "  Mau ngomong (mode suara)? Jalankan:"
+Write-Host "    irm https://raw.githubusercontent.com/$repo/main/install-voice.ps1 | iex"

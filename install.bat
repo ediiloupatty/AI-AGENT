@@ -40,8 +40,8 @@ echo  Selesai terpasang di %VOCA_INSTALL_DIR%
 echo ===========================================
 echo  Jalankan:  voca
 echo    ^(API key diminta otomatis saat pertama dijalankan^)
-echo  Mode suara: siapkan sidecar Python manual ^(lihat rust\README.md^),
-echo    lalu set VOCA_VOICE_PYTHON ^& VOCA_VOICE_HOME.
+echo  Mode suara ^(ngomong^): jalankan di PowerShell:
+echo    irm https://raw.githubusercontent.com/%REPO%/main/install-voice.ps1 ^| iex
 echo.
 
 REM --- 4) Tawarkan buka terminal baru (PATH ter-refresh) biar 'voca' langsung jalan ---
