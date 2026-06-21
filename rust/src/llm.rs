@@ -116,6 +116,41 @@ fn debug_log(msg: &str) {
     }
 }
 
+// ── Live model listing (GET /models, OpenAI-compatible) ──────────────────────
+
+#[derive(Deserialize)]
+struct ModelList {
+    data: Vec<ModelEntry>,
+}
+#[derive(Deserialize)]
+struct ModelEntry {
+    id: String,
+}
+
+/// Ambil daftar model terkini langsung dari provider via `GET {base_url}/models`.
+/// Semua endpoint OpenAI-compatible mendukung ini → daftar selalu up-to-date
+/// tanpa perlu update kode. Dipakai opsi "↻ live" di picker model.
+pub async fn list_models(client: reqwest::Client, provider: Provider) -> Result<Vec<String>> {
+    let url = format!("{}/models", provider.base_url.trim_end_matches('/'));
+    debug_log(&format!("→ GET {url}"));
+    let mut req = client.get(&url);
+    if let Some(key) = provider.api_key.as_deref() {
+        if !key.is_empty() {
+            req = req.bearer_auth(key);
+        }
+    }
+    let resp = req.send().await.context("failed to reach /models")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!("HTTP {status}: {body}"));
+    }
+    let parsed: ModelList = resp.json().await.context("parse /models")?;
+    let mut ids: Vec<String> = parsed.data.into_iter().map(|m| m.id).collect();
+    ids.sort();
+    Ok(ids)
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 pub async fn stream_to_channel(
